@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # WSL 里跑：手机插在 Windows 上、解锁，然后双击 resign.bat 就会调到这里。约两分钟。
 set -e
-IPA=$(ls -t /mnt/c/Users/*/Desktop/WatchPipe.ipa /mnt/c/Users/*/OneDrive/*/WatchPipe.ipa /mnt/c/Users/*/Downloads/WatchPipe.ipa 2>/dev/null | head -1 || true)
+IPA=$(ls -t ~/WatchPipe.ipa /mnt/c/Users/*/Desktop/WatchPipe.ipa /mnt/c/Users/*/OneDrive/*/WatchPipe.ipa /mnt/c/Users/*/Downloads/WatchPipe.ipa 2>/dev/null | head -1 || true)
 [ -n "$IPA" ] || { echo "没找到 WatchPipe.ipa，放到桌面或下载文件夹"; exit 1; }
 echo "用这个包：$IPA"
 sudo service usbmuxd stop 2>/dev/null || true
