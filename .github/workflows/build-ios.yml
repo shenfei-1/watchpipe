@@ -11,18 +11,26 @@ jobs:
       - uses: actions/checkout@v4
       - run: brew install xcodegen
       - run: xcodegen generate
+      - name: Show toolchain and schemes
+        run: |
+          xcodebuild -version
+          xcodebuild -list -project WatchPipe.xcodeproj
       - name: Build (ad-hoc signed so entitlements survive)
         run: |
+          set -o pipefail
           xcodebuild -project WatchPipe.xcodeproj -scheme WatchPipe \
             -configuration Release -sdk iphoneos -derivedDataPath build \
             CODE_SIGN_IDENTITY="-" CODE_SIGNING_REQUIRED=NO CODE_SIGNING_ALLOWED=YES \
             AD_HOC_CODE_SIGNING_ALLOWED=YES DEVELOPMENT_TEAM="" PROVISIONING_PROFILE_SPECIFIER="" \
-            build | tail -50
+            build > xcodebuild.log 2>&1 || { echo "::error::xcodebuild failed"; grep -nE "error:|warning: .*deprecated|BUILD" xcodebuild.log | head -80; tail -60 xcodebuild.log; exit 1; }
+          grep -nE "error:|\*\* BUILD" xcodebuild.log | head -20 || true
+          find build/Build/Products -maxdepth 2 -name "*.app" -print
       - name: Package + verify entitlements are in the binary
         run: |
           APP=$(find build/Build/Products/Release-iphoneos -maxdepth 1 -name "*.app" | head -1)
           echo "APP=$APP"
-          codesign -d --entitlements :- "$APP" > ent.plist 2>/dev/null || codesign -d --entitlements - --xml "$APP" > ent.plist
+          [ -n "$APP" ] || { echo "::error::no .app produced"; ls -R build/Build/Products | head -40; exit 1; }
+          codesign -d --entitlements - --xml "$APP" > ent.plist 2>/dev/null || codesign -d --entitlements :- "$APP" > ent.plist
           cat ent.plist
           grep -q "com.apple.developer.healthkit<" ent.plist || { echo "!! healthkit entitlement missing"; exit 1; }
           grep -q "healthkit.background-delivery" ent.plist || { echo "!! background-delivery entitlement missing"; exit 1; }
