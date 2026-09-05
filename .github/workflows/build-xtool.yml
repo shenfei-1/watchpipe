@@ -1,0 +1,32 @@
+name: build-xtool-patched
+on:
+  push:
+    branches: [main]
+    paths: ["patches/**", ".github/workflows/build-xtool.yml"]
+  workflow_dispatch:
+env:
+  XTOOL_COMMIT: ae2bef7bbae65ff51a48e57d93c90ea8ec9f341f   # 2026-09-04，补丁就是对着这个提交打的
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Clone xtool at pinned commit and apply patches
+        run: |
+          git clone https://github.com/xtool-org/xtool.git src
+          cd src && git checkout "$XTOOL_COMMIT"
+          git apply ../patches/*.patch
+          # 补丁没打上就直接失败，别等二十分钟编译完才发现
+          grep -q "HealthKitBackgroundDeliveryEntitlement" Sources/XKit/Model/Entitlements/EntitlementTypes.swift
+          grep -q "HealthKitBackgroundDeliveryEntitlement" "Sources/XKit/DeveloperServices/App IDs/Entitlements/DeveloperServicesCapability.swift"
+          echo "patch OK"
+      - name: Build AppImage in docker
+        run: |
+          cd src && docker build --target build-xtool -t xtool-patched .
+          id=$(docker create xtool-patched)
+          mkdir -p ../out && docker cp "$id:/xtool/Linux/packages/." ../out/
+          ls -la ../out
+      - uses: actions/upload-artifact@v4
+        with:
+          name: xtool-patched
+          path: out/*.AppImage

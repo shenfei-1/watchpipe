@@ -1,0 +1,39 @@
+name: WatchPipe
+options:
+  bundleIdPrefix: top.bingk
+  deploymentTarget:
+    iOS: "16.0"
+  createIntermediateGroups: true
+targets:
+  WatchPipe:
+    type: application
+    platform: iOS
+    sources:
+      - WatchPipe
+    entitlements:
+      path: WatchPipe/WatchPipe.entitlements
+      properties:
+        com.apple.developer.healthkit: true
+        com.apple.developer.healthkit.background-delivery: true
+        com.apple.developer.healthkit.access: []
+    info:
+      path: WatchPipe/Info.plist
+      properties:
+        CFBundleDisplayName: WatchPipe
+        CFBundleShortVersionString: "1.0"
+        CFBundleVersion: "1"
+        UILaunchScreen: {}
+        UISupportedInterfaceOrientations: [UIInterfaceOrientationPortrait]
+        NSHealthShareUsageDescription: "读取手表的心率、血氧、睡眠等数据，上传到你自己的服务器。"
+        NSHealthUpdateUsageDescription: "本 app 不写入任何健康数据。"
+        UIBackgroundModes: [fetch, processing]
+        BGTaskSchedulerPermittedIdentifiers: [top.bingk.watchpipe.refresh]
+        ITSAppUsesNonExemptEncryption: false
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: top.bingk.watchpipe
+        SWIFT_VERSION: "5.9"
+        TARGETED_DEVICE_FAMILY: "1"
+        IPHONEOS_DEPLOYMENT_TARGET: "16.0"
+        CODE_SIGN_STYLE: Manual
+        DEVELOPMENT_TEAM: ""

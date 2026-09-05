@@ -1,0 +1,34 @@
+name: build-ios
+on:
+  push:
+    branches: [main]
+    paths-ignore: ["patches/**", ".github/workflows/build-xtool.yml", "tools/**", "README.md"]
+  workflow_dispatch:
+jobs:
+  build:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: brew install xcodegen
+      - run: xcodegen generate
+      - name: Build (ad-hoc signed so entitlements survive)
+        run: |
+          xcodebuild -project WatchPipe.xcodeproj -scheme WatchPipe \
+            -configuration Release -sdk iphoneos -derivedDataPath build \
+            CODE_SIGN_IDENTITY="-" CODE_SIGNING_REQUIRED=NO CODE_SIGNING_ALLOWED=YES \
+            AD_HOC_CODE_SIGNING_ALLOWED=YES DEVELOPMENT_TEAM="" PROVISIONING_PROFILE_SPECIFIER="" \
+            build | tail -50
+      - name: Package + verify entitlements are in the binary
+        run: |
+          APP=$(find build/Build/Products/Release-iphoneos -maxdepth 1 -name "*.app" | head -1)
+          echo "APP=$APP"
+          codesign -d --entitlements :- "$APP" > ent.plist 2>/dev/null || codesign -d --entitlements - --xml "$APP" > ent.plist
+          cat ent.plist
+          grep -q "com.apple.developer.healthkit<" ent.plist || { echo "!! healthkit entitlement missing"; exit 1; }
+          grep -q "healthkit.background-delivery" ent.plist || { echo "!! background-delivery entitlement missing"; exit 1; }
+          rm -rf Payload && mkdir Payload && cp -R "$APP" Payload/ && zip -qry WatchPipe.ipa Payload
+          ls -la WatchPipe.ipa
+      - uses: actions/upload-artifact@v4
+        with:
+          name: WatchPipe-ipa
+          path: WatchPipe.ipa

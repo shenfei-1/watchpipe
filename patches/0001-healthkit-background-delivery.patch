@@ -1,0 +1,40 @@
+diff --git a/Sources/XKit/DeveloperServices/App IDs/Entitlements/DeveloperServicesCapability.swift b/Sources/XKit/DeveloperServices/App IDs/Entitlements/DeveloperServicesCapability.swift
+index 2dca463..edee001 100644
+--- a/Sources/XKit/DeveloperServices/App IDs/Entitlements/DeveloperServicesCapability.swift	
++++ b/Sources/XKit/DeveloperServices/App IDs/Entitlements/DeveloperServicesCapability.swift	
+@@ -91,6 +91,12 @@ extension HealthKitEntitlement: EntitlementWithCapability {
+     }
+ }
+ 
++extension HealthKitBackgroundDeliveryEntitlement: EntitlementWithCapability {
++    var capability: DeveloperServicesCapability {
++        DeveloperServicesCapability(.healthkit, isFree: true)
++    }
++}
++
+ extension HomeKitEntitlement: EntitlementWithCapability {
+     var capability: DeveloperServicesCapability {
+         DeveloperServicesCapability(.homekit, isFree: true)
+diff --git a/Sources/XKit/Model/Entitlements/EntitlementTypes.swift b/Sources/XKit/Model/Entitlements/EntitlementTypes.swift
+index 1d65a04..9e7b904 100644
+--- a/Sources/XKit/Model/Entitlements/EntitlementTypes.swift
++++ b/Sources/XKit/Model/Entitlements/EntitlementTypes.swift
+@@ -29,6 +29,7 @@ extension EntitlementContainer {
+         WiFiAwareEntitlement.self,
+         HomeKitEntitlement.self,
+         HealthKitEntitlement.self,
++        HealthKitBackgroundDeliveryEntitlement.self,
+     ]
+ }
+ 
+@@ -184,3 +185,10 @@ public struct HealthKitEntitlement: Entitlement, RawRepresentable {
+     public var rawValue: Bool
+     public init(rawValue: Bool) { self.rawValue = rawValue }
+ }
++
++public struct HealthKitBackgroundDeliveryEntitlement: Entitlement, RawRepresentable {
++    public static let identifier = "com.apple.developer.healthkit.background-delivery"
++
++    public var rawValue: Bool
++    public init(rawValue: Bool) { self.rawValue = rawValue }
++}
