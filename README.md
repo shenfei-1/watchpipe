@@ -12,7 +12,7 @@
 
 ## 冰冰要做的（一次性，Windows 上）
 1. **推仓库**：在 GitHub 建一个空仓库（建议公开，仓库里没有任何密钥），把这些文件推上去。Actions 会自动跑两个流水线：`build-ios`（约 10 分钟）和 `build-xtool-patched`（约 30–40 分钟）。跑完在 Actions 页面下载两个产物：`WatchPipe-ipa` 和 `xtool-patched`。
-2. **Windows 准备**（PowerShell 管理员）：
+2. **Windows 准备**：先去 Microsoft Store 装 **Apple Devices**（苹果官方、免费），装完手机插线解锁，点「信任此电脑」。然后 PowerShell（管理员）：
    ```powershell
    wsl --install            # 装完重启一次；第一次打开 Ubuntu 会让你设用户名密码
    netstat -ano | findstr 27015      # 装过 iTunes / Apple Devices / 爱思就会有这一行
