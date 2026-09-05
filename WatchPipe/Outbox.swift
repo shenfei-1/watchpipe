@@ -48,7 +48,7 @@ final class Outbox {
             guard !lines.isEmpty else { return nil }
             let take = Array(lines.prefix(Self.batchLimit)); lines.removeFirst(take.count)
             let body = "{\"samples\":[" + take.joined(separator: ",") + "]}"
-            let name = String(format: "%.0f-%@.json", Date().timeIntervalSince1970 * 1000, UUID().uuidString.prefix(8) as CVarArg)
+            let name = "\(Int(Date().timeIntervalSince1970 * 1000))-\(UUID().uuidString.prefix(8)).json"
             let url = Paths.batches.appendingPathComponent(name)
             do {
                 try body.write(to: url, atomically: true, encoding: .utf8)
