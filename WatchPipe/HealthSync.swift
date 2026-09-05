@@ -29,11 +29,11 @@ final class HealthSync {
     static let sleepType = HKCategoryType(.sleepAnalysis)
 
     var readTypes: Set<HKObjectType> {
-        var s = Set<HKObjectType>(quantities.map { HKQuantityType($0.id) })
+        var s = Set<HKObjectType>(Self.quantities.map { HKQuantityType($0.id) })
         s.insert(Self.sleepType); return s
     }
     var allSampleTypes: [(String, HKSampleType)] {
-        quantities.map { ($0.name, HKQuantityType($0.id)) } + [("sleep", Self.sleepType)]
+        Self.quantities.map { ($0.name, HKQuantityType($0.id)) } + [("sleep", Self.sleepType)]
     }
 
     var isAvailable: Bool { HKHealthStore.isHealthDataAvailable() }
