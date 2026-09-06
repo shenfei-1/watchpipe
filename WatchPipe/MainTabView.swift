@@ -26,7 +26,6 @@ struct MoreView: View {
         NavigationView {
             List {
                 NavigationLink { WebTabPage(title: "相册", url: URL(string: "\(base)/chat/album.html")!).navigationTitle("相册").navigationBarTitleDisplayMode(.inline) } label: { Label("相册", systemImage: "photo.on.rectangle") }
-                NavigationLink { WebTabPage(title: "记忆库", url: URL(string: "\(base)/ob/")!).navigationTitle("记忆库").navigationBarTitleDisplayMode(.inline) } label: { Label("记忆库", systemImage: "brain") }
                 NavigationLink { WebTabPage(title: "塔罗", url: URL(string: "\(base)/tarot/")!).navigationTitle("塔罗").navigationBarTitleDisplayMode(.inline) } label: { Label("塔罗", systemImage: "sparkles") }
             }
             .navigationTitle("更多")

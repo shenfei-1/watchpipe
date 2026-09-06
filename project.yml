@@ -21,7 +21,7 @@ targets:
       properties:
         CFBundleDisplayName: 留灯
         CFBundleShortVersionString: "2.0"
-        CFBundleVersion: "4"
+        CFBundleVersion: "5"
         UILaunchScreen: {}
         UISupportedInterfaceOrientations: [UIInterfaceOrientationPortrait]
         NSHealthShareUsageDescription: "读取手表的心率、血氧、睡眠等数据，上传到你自己的服务器。"
