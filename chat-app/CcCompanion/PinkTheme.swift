@@ -2,6 +2,7 @@
 //  色值可从服务器 GET /theme 拉（data/theme.json），改文件不用重装；拉不到用这里的内置值。
 
 import SwiftUI
+import Combine
 
 extension Color {
     /// "#RRGGBB" / "RRGGBB" → Color；解析失败给粉色兜底，别让界面变黑。
