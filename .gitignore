@@ -1,4 +1,6 @@
 *.xcodeproj/
+!chat-app/CcCompanion.xcodeproj/
+chat-app/CcCompanion.xcodeproj/xcuserdata/
 build/
 Payload/
 *.ipa

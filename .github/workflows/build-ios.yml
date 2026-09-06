@@ -2,7 +2,7 @@ name: build-ios
 on:
   push:
     branches: [main]
-    paths-ignore: ["patches/**", ".github/workflows/build-xtool.yml", "tools/**", "README.md"]
+    paths-ignore: ["patches/**", ".github/workflows/build-xtool.yml", ".github/workflows/build-chat.yml", "tools/**", "README.md", "chat-app/**"]
   workflow_dispatch:
 jobs:
   build:
