@@ -277,7 +277,7 @@ struct OnboardingWizard: View {
                 actionButton(label: "下一步, 设置 AI 身份") {
                     // Persist server URL + secret here (跟 phase 2.2 之前的 completeOnboarding 同 logic, 但 onboardingCompleted 不翻直到最后)
                     if let url = URL(string: serverURLInput),
-                       let defaults = UserDefaults(suiteName: CcServerConfig.appGroup) {
+                       let defaults = Optional(UserDefaults.standard) {
                         defaults.set(url.absoluteString, forKey: "serverURL")
                         if !sharedSecretInput.isEmpty {
                             CcServerConfig.setSharedSecret(sharedSecretInput)
@@ -377,7 +377,7 @@ struct OnboardingWizard: View {
         // Phase A — server URL + secret already persisted at step 3 → 4 transition.
         // Idempotent re-write here as belt-and-suspenders in case user backed up.
         if let url = URL(string: serverURLInput),
-           let defaults = UserDefaults(suiteName: CcServerConfig.appGroup) {
+           let defaults = Optional(UserDefaults.standard) {
             defaults.set(url.absoluteString, forKey: "serverURL")
             if !sharedSecretInput.isEmpty {
                 CcServerConfig.setSharedSecret(sharedSecretInput)
