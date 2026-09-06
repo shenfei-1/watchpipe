@@ -94,6 +94,8 @@ final class ThemeStore: ObservableObject {
     @Published var followSystemColorScheme: Bool {
         didSet { UserDefaults.standard.set(followSystemColorScheme, forKey: "cc.followSystemColorScheme") }
     }
+    // 珩 2026-09-06：服务器 /theme 拉到新色值时 +1，根视图用它 .id() 重建，颜色当场换
+    @Published var paletteStamp: Int = 0
     private init() {
         // 珩 2026-09-06：默认冰粉；老安装存的是 warm 的话迁一次到 pink（只迁一次，之后她自己选什么就是什么）
         var raw = UserDefaults.standard.string(forKey: "cc.theme") ?? CcTheme.pink.rawValue

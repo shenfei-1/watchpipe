@@ -14,6 +14,7 @@ struct CcCompanionApp: App {
     @UIApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
     // 珩 2026-09-06 1.2：冷启动先出 Lamp 开屏（图 + 我每天一句），按 Enter 淡出进聊天
     @State private var showSplash = true
+    @StateObject private var themeStore = ThemeStore.shared
 
     init() {
         // Build 218 r3 — XCUITest hook: when launched with UITEST_GROUP_UPLOAD_SMOKE=1
@@ -78,6 +79,7 @@ struct CcCompanionApp: App {
         WindowGroup {
             ZStack {
                 ContentView()
+                    .id(themeStore.paletteStamp)   // 服务器色值拉到 → 整棵重建，气泡当场换色
                     .ccSerifTheme()
                     .whatsNewGate()   // v1.2 新 build 首启弹 What's New
                 if showSplash {

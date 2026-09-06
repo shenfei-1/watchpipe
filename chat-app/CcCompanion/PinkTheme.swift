@@ -49,7 +49,7 @@ enum PinkPalette {
         guard !out.isEmpty, out != cache else { return }
         cache = out
         UserDefaults.standard.set(out, forKey: storeKey)
-        ThemeStore.shared.objectWillChange.send()
+        ThemeStore.shared.paletteStamp += 1
     }
 
     static func fetchFromServer() async {
