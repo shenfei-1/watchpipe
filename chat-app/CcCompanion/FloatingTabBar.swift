@@ -126,7 +126,7 @@ struct FloatingTabBar: View {
                             .offset(x: -4, y: 4)
                     }
                 Text(item.title)
-                    .font(.system(size: titleSize, weight: isActive ? .semibold : .regular, design: titleDesign))
+                    .font(.custom("CormorantGaramond-Medium", size: titleSize + 4))   // 珩 2026-09-06：衬线英文
             }
             .foregroundStyle(isActive ? activeFg : inactiveFg)
             .padding(.vertical, 4)
