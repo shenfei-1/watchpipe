@@ -2946,6 +2946,8 @@ struct ChatView: View {
             .padding(.horizontal, 16)
             .padding(.vertical, 8)
             .background(Color.ccBg)
+            // 珩 2026-09-06 戳一戳卡片挂在 header 上（挂在大链上会让编译器超时）
+            .sheet(isPresented: $showPoke) { PokeSheet() }
 
             // 搜索 search bar + filter tab — 仅 search 模式可见 自定义实现 (replace .searchable iOS 17+ bug)
             if showSearch {
@@ -3148,9 +3150,6 @@ struct ChatView: View {
             case .failure(let err):
                 vm.lastError = "选择文件失败: \(err.localizedDescription)"
             }
-        }
-        .sheet(isPresented: $showPoke) {
-            PokeSheet()
         }
         .sheet(isPresented: $showShareSheet) {
             ActivityShareView(activityItems: [shareText])
