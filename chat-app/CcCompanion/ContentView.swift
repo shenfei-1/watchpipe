@@ -58,6 +58,8 @@ struct ContentView: View {
     @StateObject private var groupStore = GroupStore()
     // Build 215 P4 — chat tab unread badge store (跑独立 light polling 不依赖 ChatViewModel)
     @StateObject private var chatBadgeStore = ChatBadgeStore()
+    // 珩 2026-09-06：键盘弹起时底栏收起（1.2.1）
+    @StateObject private var keyboard = KeyboardObserver()
     @AppStorage("cc_onboarding_completed") private var onboardingCompleted: Bool = false
     @AppStorage("feature_group_view") private var featureGroupView: Bool = false
 
@@ -107,9 +109,12 @@ struct ContentView: View {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
 
-            FloatingTabBar(items: tabs, selection: $selectedTab)
-                .ignoresSafeArea(.keyboard, edges: .bottom)  // tab bar 不被 keyboard 推上去 始终保持在底部
+            if !keyboard.visible {
+                FloatingTabBar(items: tabs, selection: $selectedTab)
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
+            }
         }
+        .animation(.easeOut(duration: 0.22), value: keyboard.visible)
         .background(Color.ccBg)
         .overlay(CcToastOverlay())  // Phase D — global toast (复制/收藏 反馈)
         .font(theme.theme == .terminal ? .system(.body, design: .monospaced) : nil)
