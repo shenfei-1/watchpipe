@@ -4367,6 +4367,9 @@ private struct ChatListView: View {
         if focused {
             // 珩 2026-09-06 施工单⑪：等键盘动画（~0.25s）走完再落底，不跟键盘动画抢同一帧
             scrollToBottom(proxy: proxy, delay: 0.28, animated: false)
+        } else if !isUserScrolledUp {
+            // 珩 2026-09-06（她 20:38 说的）：收键盘后气泡不掉下来——键盘收完再把列表贴回底
+            scrollToBottom(proxy: proxy, delay: 0.3, animated: true)
         }
     }
 
