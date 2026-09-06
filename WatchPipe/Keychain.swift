@@ -36,4 +36,13 @@ enum Settings {
         get { Keychain.get("secret") ?? "" }
         set { Keychain.set(newValue, for: "secret") }
     }
+    /// bing-k.top 上带 basic auth 的页面（小屋等）用的账号密码，填一次
+    static var siteUser: String {
+        get { Keychain.get("site_user") ?? "" }
+        set { Keychain.set(newValue, for: "site_user") }
+    }
+    static var sitePass: String {
+        get { Keychain.get("site_pass") ?? "" }
+        set { Keychain.set(newValue, for: "site_pass") }
+    }
 }

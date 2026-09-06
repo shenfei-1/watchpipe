@@ -8,6 +8,8 @@ struct ContentView: View {
     @State private var pending = Outbox.shared.pendingCount
     @State private var inflight = Outbox.shared.inflightFiles.count
     @State private var busy = false
+    @State private var siteUser = Settings.siteUser
+    @State private var sitePass = Settings.sitePass
 
     var body: some View {
         NavigationView {
@@ -16,6 +18,11 @@ struct ContentView: View {
                     TextField("接口地址", text: $url).textInputAutocapitalization(.never).autocorrectionDisabled().keyboardType(.URL)
                     SecureField("令牌（secret）", text: $secret)
                     Button("保存") { Settings.serverURL = url.trimmingCharacters(in: .whitespaces); Settings.secret = secret.trimmingCharacters(in: .whitespaces); Log.shared.add("已保存服务器设置") }
+                }
+                Section("我们的网站（小屋等页面的登录）") {
+                    TextField("用户名", text: $siteUser).textInputAutocapitalization(.never).autocorrectionDisabled()
+                    SecureField("密码", text: $sitePass)
+                    Button("保存") { Settings.siteUser = siteUser.trimmingCharacters(in: .whitespaces); Settings.sitePass = sitePass; Log.shared.add("已保存网站登录") }
                 }
                 Section("状态") {
                     HStack { Text("健康授权"); Spacer(); Text(authorized ? "已授权" : "未授权").foregroundColor(authorized ? .green : .red) }
@@ -35,7 +42,7 @@ struct ContentView: View {
                     }
                 }
             }
-            .navigationTitle("WatchPipe")
+            .navigationTitle("心率")
             .onReceive(NotificationCenter.default.publisher(for: UIApplication.willEnterForegroundNotification)) { _ in refresh() }
         }
     }

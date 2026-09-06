@@ -5,7 +5,7 @@ import BackgroundTasks
 struct WatchPipeApp: App {
     @UIApplicationDelegateAdaptor(AppDelegate.self) var delegate
     var body: some Scene {
-        WindowGroup { ContentView() }
+        WindowGroup { MainTabView() }
     }
 }
 
