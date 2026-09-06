@@ -12,6 +12,8 @@ import CoreText
 @main
 struct CcCompanionApp: App {
     @UIApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
+    // 珩 2026-09-06 1.2：冷启动先出 Lamp 开屏（图 + 我每天一句），按 Enter 淡出进聊天
+    @State private var showSplash = true
 
     init() {
         // Build 218 r3 — XCUITest hook: when launched with UITEST_GROUP_UPLOAD_SMOKE=1
@@ -74,9 +76,16 @@ struct CcCompanionApp: App {
 
     var body: some Scene {
         WindowGroup {
-            ContentView()
-                .ccSerifTheme()
-                .whatsNewGate()   // v1.2 新 build 首启弹 What's New
+            ZStack {
+                ContentView()
+                    .ccSerifTheme()
+                    .whatsNewGate()   // v1.2 新 build 首启弹 What's New
+                if showSplash {
+                    SplashView { withAnimation(.easeInOut(duration: 0.55)) { showSplash = false } }
+                        .transition(.opacity)
+                        .zIndex(1)
+                }
+            }
         }
         #if targetEnvironment(macCatalyst)
         .commands {

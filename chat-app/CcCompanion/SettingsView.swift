@@ -703,7 +703,7 @@ struct CcSettingsView: View {
 
                     toggleRow("跟随系统切换浅色/深色", binding: $themeStore.followSystemColorScheme)
 
-                    if !themeStore.followSystemColorScheme && themeStore.theme == .warm {
+                    if !themeStore.followSystemColorScheme && (themeStore.theme == .warm || themeStore.theme == .pink) {
                         Picker("", selection: $themeStore.schemePref) {
                             Text("浅色").tag(CcColorSchemePref.light)
                             Text("深色").tag(CcColorSchemePref.dark)
@@ -1427,7 +1427,7 @@ struct CcSettingsView: View {
                 Text("Settings")
                     .font(.ccSerifAdaptive(size: 28, weight: .bold))
                     .foregroundStyle(Color.ccText)
-                Text("STATUS · INFO")
+                Text("留灯 · LAMP")
                     .font(.system(.caption, design: .monospaced))
                     .foregroundStyle(Color.ccTextDim)
                     .tracking(1.5)

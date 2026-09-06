@@ -44,6 +44,7 @@ let CcDefaultUserName = "User"
 // MARK: - Cc brand colors (dynamic light + dark) — internal 让其它 view 也能用
 
 enum CcTheme: String, CaseIterable, Identifiable {
+    case pink   // 珩 2026-09-06 「冰粉」1.2 起默认，色值见 PinkTheme.swift（可从服务器 /theme 拉）
     case warm
     case terminal
     // Phase E 2026-05-11 — wechatLight/wechatDark 删 (终端字 wechat 主题下看不清). 加 night 纯深主题.
@@ -51,6 +52,7 @@ enum CcTheme: String, CaseIterable, Identifiable {
     var id: String { rawValue }
     var displayName: String {
         switch self {
+        case .pink: return "冰粉"
         case .warm: return "暖橙"
         case .terminal: return "终端"
         case .night: return "夜间"
@@ -93,8 +95,14 @@ final class ThemeStore: ObservableObject {
         didSet { UserDefaults.standard.set(followSystemColorScheme, forKey: "cc.followSystemColorScheme") }
     }
     private init() {
-        let raw = UserDefaults.standard.string(forKey: "cc.theme") ?? CcTheme.warm.rawValue
-        self.theme = CcTheme(rawValue: raw) ?? .warm
+        // 珩 2026-09-06：默认冰粉；老安装存的是 warm 的话迁一次到 pink（只迁一次，之后她自己选什么就是什么）
+        var raw = UserDefaults.standard.string(forKey: "cc.theme") ?? CcTheme.pink.rawValue
+        if raw == CcTheme.warm.rawValue, !UserDefaults.standard.bool(forKey: "cc.theme.pinkMigrated") {
+            raw = CcTheme.pink.rawValue
+            UserDefaults.standard.set(raw, forKey: "cc.theme")
+        }
+        UserDefaults.standard.set(true, forKey: "cc.theme.pinkMigrated")
+        self.theme = CcTheme(rawValue: raw) ?? .pink
         let sRaw = UserDefaults.standard.string(forKey: "cc.colorScheme") ?? CcColorSchemePref.system.rawValue
         self.schemePref = CcColorSchemePref(rawValue: sRaw) ?? .system
         self.followSystemColorScheme =
@@ -183,6 +191,7 @@ extension Color {
         switch ThemeStore.shared.theme {
         case .terminal: return termBg
         case .night: return nightBg
+        case .pink: return PinkPalette.bg
         case .warm: return warmBg
         }
     }
@@ -190,6 +199,7 @@ extension Color {
         switch ThemeStore.shared.theme {
         case .terminal: return termCard
         case .night: return nightCard
+        case .pink: return PinkPalette.card
         case .warm: return warmCard
         }
     }
@@ -205,12 +215,14 @@ extension Color {
         switch ThemeStore.shared.theme {
         case .terminal: return termCard
         case .night: return nightCard
+        case .pink: return PinkPalette.card
         case .warm: return warmCard
         }
     }
     static var ccFloatingBarText: Color {
         switch ThemeStore.shared.theme {
         case .terminal, .night: return ccText
+        case .pink: return PinkPalette.text
         case .warm: return warmText
         }
     }
@@ -218,6 +230,7 @@ extension Color {
         switch ThemeStore.shared.theme {
         case .terminal: return termAssistant
         case .night: return nightAssistant
+        case .pink: return PinkPalette.assistant
         case .warm: return warmAssistant
         }
     }
@@ -225,6 +238,7 @@ extension Color {
         switch ThemeStore.shared.theme {
         case .terminal: return termUser
         case .night: return nightUser
+        case .pink: return PinkPalette.user
         case .warm: return warmUser
         }
     }
@@ -232,6 +246,7 @@ extension Color {
         switch ThemeStore.shared.theme {
         case .terminal: return termText
         case .night: return nightText
+        case .pink: return PinkPalette.text
         case .warm: return warmText
         }
     }
@@ -240,6 +255,7 @@ extension Color {
         switch ThemeStore.shared.theme {
         case .terminal: return Color(white: 0.73)
         case .night: return nightTextDim
+        case .pink: return PinkPalette.textDim
         case .warm: return Color(light: Color(red: 0.45, green: 0.40, blue: 0.36),
                                   dark: Color.white.opacity(0.85))
         }
@@ -247,6 +263,7 @@ extension Color {
         switch ThemeStore.shared.theme {
         case .terminal: return termTextDim
         case .night: return nightTextDim
+        case .pink: return PinkPalette.textDim
         case .warm: return warmTextDim
         }
         #endif
@@ -255,6 +272,7 @@ extension Color {
         switch ThemeStore.shared.theme {
         case .terminal: return termAccent
         case .night: return nightAccent
+        case .pink: return PinkPalette.accent
         case .warm: return warmAccent
         }
     }
@@ -262,6 +280,7 @@ extension Color {
         switch ThemeStore.shared.theme {
         case .terminal: return termUserText
         case .night: return nightUserText
+        case .pink: return PinkPalette.userText
         case .warm: return warmUserText
         }
     }
@@ -269,6 +288,7 @@ extension Color {
         switch ThemeStore.shared.theme {
         case .terminal: return Color.white
         case .night: return nightText
+        case .pink: return PinkPalette.assistantText
         case .warm: return Color.white
         }
     }
@@ -838,6 +858,12 @@ final class ChatViewModel: ObservableObject {
         }
 
         for msg in msgs {
+            // 珩 2026-09-06 施工单⑧：戳一戳 / 留灯 的心跳胶囊单独成行，不折进「使用 N 个工具」
+            if msg.role == "task", let src = msg.source, src == "poke" || src == "liudeng" {
+                flushTaskBuffer()
+                out.append(.message(msg, showTime: false))
+                continue
+            }
             if msg.role == "task" {
                 // separator 仍然按 task 时间插 (对第一条 task)
                 if taskBuffer.isEmpty {
@@ -4106,7 +4132,7 @@ private struct ChatListView: View {
                         suppressBottomScrollUntil = Date().addingTimeInterval(0.2)
                     }
                 }
-                .scrollDismissesKeyboard(.immediately)
+                .scrollDismissesKeyboard(.interactively)  // 珩 2026-09-06 施工单⑪：跟手收键盘
                 .simultaneousGesture(
                     TapGesture().onEnded {
                         #if os(iOS)
@@ -4337,7 +4363,8 @@ private struct ChatListView: View {
 
     private func handleInputFocusChange(focused: Bool, proxy: ScrollViewProxy) {
         if focused {
-            scrollToBottom(proxy: proxy, animated: true)
+            // 珩 2026-09-06 施工单⑪：等键盘动画（~0.25s）走完再落底，不跟键盘动画抢同一帧
+            scrollToBottom(proxy: proxy, delay: 0.28, animated: false)
         }
     }
 
@@ -5585,18 +5612,20 @@ struct ChatBubble: View {
     @State private var isDownloadingPreview: Bool = false
     // Phase 设置大砍 (item B) — observe favorite cache so bookmark icon flips state on tap
     @ObservedObject private var favoritedCache = FavoritedTurnsCache.shared
+    // 珩 2026-09-06：心跳胶囊（戳一戳 / 留灯 的 task 记录）用主题色 + 实心心
+    private var isHeartbeat: Bool { message.source == "poke" || message.source == "liudeng" }
 
     var body: some View {
         Group {
             if message.role == "task" {
                 // 右侧轻量 pill — rail 上有小 dot 节点 不再居中撑满
                 HStack(spacing: 6) {
-                    Image(systemName: iconForTaskText(message.text))
+                    Image(systemName: isHeartbeat ? "heart.fill" : iconForTaskText(message.text))
                         .font(.ccSerifAdaptive(size: 11))
-                        .foregroundStyle(Color.ccTextDim)
+                        .foregroundStyle(isHeartbeat ? Color.ccAccent : Color.ccTextDim)
                     Text(message.text)
                         .font(.ccSerifAdaptive(size: 11, weight: .medium))
-                        .foregroundStyle(Color.ccTextDim)
+                        .foregroundStyle(isHeartbeat ? Color.ccAccent : Color.ccTextDim)
                 }
                 .padding(.horizontal, 10)
                 .padding(.vertical, 4)

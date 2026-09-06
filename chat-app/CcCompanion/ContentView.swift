@@ -85,7 +85,9 @@ struct ContentView: View {
         if featureGroupView {
             items.append(.init(id: 3, title: "群聊", systemImage: "person.3.sequence.fill", badge: groupTabBadge))
         }
-        items.append(.init(id: 1, title: "终端", systemImage: "terminal"))
+        // 珩 2026-09-06 1.2：终端标签换成「家」（桌面网页）+「相册」，都是 WKWebView 装自家页
+        items.append(.init(id: 1, title: "家", systemImage: "house.fill"))
+        items.append(.init(id: 4, title: "相册", systemImage: "photo.on.rectangle.angled"))
         items.append(.init(id: 2, title: "设置", systemImage: "gearshape.fill"))
         return items
     }
@@ -96,7 +98,8 @@ struct ContentView: View {
             Group {
                 switch selectedTab {
                 case 0: NavigationStack { ChatView(onShowFavorites: { showFavorites = true }, scrollToken: chatScrollToken) }
-                case 1: NavigationStack { TerminalView() }
+                case 1: NavigationStack { HomeWebTab(path: "home/", title: "家") }
+                case 4: NavigationStack { HomeWebTab(path: "home/album.html", title: "相册") }
                 case 2: NavigationStack { CcSettingsView() }
                 case 3 where featureGroupView: NavigationStack { GroupChatView(store: groupStore) }
                 default: NavigationStack { ChatView(onShowFavorites: { showFavorites = true }, scrollToken: chatScrollToken) }
