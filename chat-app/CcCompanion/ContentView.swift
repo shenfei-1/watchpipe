@@ -82,15 +82,15 @@ struct ContentView: View {
 
     private var tabs: [FloatingTabBarItem] {
         var items: [FloatingTabBarItem] = [
-            .init(id: 0, title: "聊天", systemImage: "bubble.left.and.bubble.right", badge: chatTabBadge),
+            .init(id: 0, title: "聊天", systemImage: "bubble.left.and.text.bubble.right", badge: chatTabBadge),
         ]
         if featureGroupView {
             items.append(.init(id: 3, title: "群聊", systemImage: "person.3.sequence.fill", badge: groupTabBadge))
         }
         // 珩 2026-09-06 1.2：终端标签换成「家」（桌面网页）+「相册」，都是 WKWebView 装自家页
-        items.append(.init(id: 1, title: "家", systemImage: "house.fill"))
-        items.append(.init(id: 4, title: "相册", systemImage: "photo.on.rectangle.angled"))
-        items.append(.init(id: 2, title: "设置", systemImage: "gearshape.fill"))
+        items.append(.init(id: 1, title: "家", systemImage: "house"))
+        items.append(.init(id: 4, title: "相册", systemImage: "photo.on.rectangle"))
+        items.append(.init(id: 2, title: "设置", systemImage: "gearshape"))
         return items
     }
 

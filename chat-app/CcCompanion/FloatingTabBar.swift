@@ -115,23 +115,22 @@ struct FloatingTabBar: View {
                 selection = item.id
             }
         } label: {
-            VStack(spacing: 3) {
+            // 珩 2026-09-06（1.2.1）：照她发的样子——细线图标坐在一枚圆里，选中时圆变粉；字在圆下面
+            VStack(spacing: 4) {
                 Image(systemName: item.systemImage)
-                    .font(.system(size: iconSize, weight: isActive ? .semibold : .regular))
+                    .font(.system(size: iconSize, weight: .regular))
+                    .frame(width: 44, height: 44)
+                    .background(Circle().fill(isActive ? activeBg : Color.clear))
                     .overlay(alignment: .topTrailing) {
                         badgeView(for: item.badge)
-                            .offset(x: 5, y: -5)
+                            .offset(x: -4, y: 4)
                     }
                 Text(item.title)
-                    .font(.system(size: titleSize, weight: isActive ? .bold : .medium, design: titleDesign))
+                    .font(.system(size: titleSize, weight: isActive ? .semibold : .regular, design: titleDesign))
             }
             .foregroundStyle(isActive ? activeFg : inactiveFg)
-            .padding(.vertical, 8)  // Phase D 6 → 8 (用户 push tab bar 太窄)
-            .padding(.horizontal, 14)  // 10 → 14
-            .background(
-                Capsule()
-                    .fill(isActive ? activeBg : Color.clear)
-            )
+            .padding(.vertical, 4)
+            .padding(.horizontal, 10)
             .id(item.id)
         }
         .buttonStyle(.plain)

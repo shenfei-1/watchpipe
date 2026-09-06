@@ -5637,6 +5637,7 @@ struct ChatBubble: View {
         }
         // 2026-05-07 用户 push bubble 两侧对称内缩 16pt (之前 assistant 紧贴左边)
         .padding(.horizontal, 16)
+        .padding(.vertical, 3)   // 珩 2026-09-06：气泡之间的间距
         // Bug 3 fix: notify parent when QuickLook preview opens/closes
         .onChange(of: quickLookURL) { _, newURL in
             onPreviewActiveChanged?(newURL != nil)
@@ -5738,6 +5739,7 @@ struct ChatBubble: View {
                                 // 通过外层"复制本条"补全复制路径, 翻译走外层 (下面 row contextMenu 增加).
                                 Text(s)
                                     .font(.ccSerifAdaptive(size: chatBodySize))
+                                    .lineSpacing(4)   // 珩 2026-09-06：行距松一点
                                     .foregroundStyle(message.isUser ? Color.ccUserText : Color.ccAssistantText)
                                     .lineLimit(nil)
                                     .fixedSize(horizontal: false, vertical: true)
@@ -5763,11 +5765,12 @@ struct ChatBubble: View {
                             }
                         }
                     }
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 8)
+                    // 珩 2026-09-06（1.2.1）：气泡更胖更圆（照她发的样子）
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 11)
                     .background(message.isUser ? Color.ccUser : Color.ccAssistant)
                     .foregroundStyle(message.isUser ? Color.ccUserText : Color.ccAssistantText)
-                    .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                    .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
                 }
                 if let loc = message.location {
                     Button {
