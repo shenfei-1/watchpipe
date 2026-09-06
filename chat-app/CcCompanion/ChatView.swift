@@ -2750,8 +2750,6 @@ struct ChatView: View {
     @State private var searchDebounceTask: Task<Void, Never>? = nil
     @State private var hasScrolledInitially: Bool = false
     @State private var showShareSheet: Bool = false
-    // 珩 2026-09-06 戳一戳卡片
-    @State private var showPoke: Bool = false
     @State private var shareText: String = ""
     @State private var showDeleteSelectedConfirm: Bool = false
     // 2026-05-12 用户 catch: chat clear 按钮在 multi-server / Bridge / Diary 几轮改动里
@@ -2936,7 +2934,6 @@ struct ChatView: View {
                     showSearch: showSearch,
                     onToggleAll: toggleAllDisplayedSelection,
                     onToggleSearch: { showSearch.toggle() },
-                    onPoke: { showPoke = true },
                     onEnterRP: {
                     },
                     onShowFavorites: onShowFavorites,
@@ -2946,8 +2943,6 @@ struct ChatView: View {
             .padding(.horizontal, 16)
             .padding(.vertical, 8)
             .background(Color.ccBg)
-            // 珩 2026-09-06 戳一戳卡片挂在 header 上（挂在大链上会让编译器超时）
-            .sheet(isPresented: $showPoke) { PokeSheet() }
 
             // 搜索 search bar + filter tab — 仅 search 模式可见 自定义实现 (replace .searchable iOS 17+ bug)
             if showSearch {
@@ -3902,8 +3897,9 @@ private struct ChatToolbarTrailing: View {
     let onToggleAll: () -> Void
     let onToggleSearch: () -> Void
     let onEnterRP: () -> Void
-    var onPoke: (() -> Void)? = nil
     var onShowFavorites: (() -> Void)? = nil
+    // 珩 2026-09-06 戳一戳：状态和 sheet 都放在这个小视图里，ChatView 的大链一行不动
+    @State private var showPoke: Bool = false
     // 2026-05-12 clear-button restore — 砍后重加.
     var onClearChat: (() -> Void)? = nil
 
@@ -3915,14 +3911,13 @@ private struct ChatToolbarTrailing: View {
         } else {
             HStack(spacing: 12) {
                 // 珩 2026-09-06 戳一戳入口：聊着聊着想戳就点开一张卡片
-                if let poke = onPoke {
-                    Button(action: poke) {
-                        Image(systemName: "hand.point.up.left.fill")
-                            .font(.ccSerifAdaptive(size: 20, weight: .semibold))
-                            .foregroundStyle(Color.ccAccent)
-                    }
-                    .accessibilityLabel("戳一戳")
+                Button { showPoke = true } label: {
+                    Image(systemName: "hand.point.up.left.fill")
+                        .font(.ccSerifAdaptive(size: 20, weight: .semibold))
+                        .foregroundStyle(Color.ccAccent)
                 }
+                .accessibilityLabel("戳一戳")
+                .sheet(isPresented: $showPoke) { PokeSheet() }
                 Button(action: onToggleSearch) {
                     Image(systemName: showSearch ? "magnifyingglass.circle.fill" : "magnifyingglass")
                         .font(.ccSerifAdaptive(size: 20, weight: .semibold))
