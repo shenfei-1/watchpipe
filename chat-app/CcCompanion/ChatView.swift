@@ -2952,7 +2952,7 @@ struct ChatView: View {
                 Spacer()
                 if vm.multiSelectMode {
                     Text("已选 \(vm.selectedTs.count) 条")
-                        .font(.ccSerifAdaptive(size: chatBodySize))
+                        .font(.system(size: chatBodySize))   // 珩 2026-09-06：正文换苹方（她选的）
                         .foregroundStyle(Color.ccText)
                 }
                 ChatToolbarTrailing(
@@ -5499,7 +5499,7 @@ struct SearchResultRow: View {
                         .foregroundStyle(Color.ccTextDim)
                 }
                 highlightedSnippet
-                    .font(.ccSerifAdaptive(size: chatBodySize))
+                    .font(.system(size: chatBodySize))   // 珩 2026-09-06：正文换苹方（她选的）
                     .foregroundStyle(Color.ccText)
                     .lineLimit(nil)
                     .multilineTextAlignment(.leading)
@@ -5743,7 +5743,7 @@ struct ChatBubble: View {
                                 // magic 所以 inner 选词菜单覆盖了外层. 这次以外层菜单为准, 失去单词级选择能力,
                                 // 通过外层"复制本条"补全复制路径, 翻译走外层 (下面 row contextMenu 增加).
                                 Text(s)
-                                    .font(.ccSerifAdaptive(size: chatBodySize))
+                                    .font(.system(size: chatBodySize))   // 珩 2026-09-06：正文换苹方（她选的）
                                     .lineSpacing(4)   // 珩 2026-09-06：行距松一点
                                     .foregroundStyle(message.isUser ? Color.ccUserText : Color.ccAssistantText)
                                     .lineLimit(nil)

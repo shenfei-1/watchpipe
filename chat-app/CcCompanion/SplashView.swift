@@ -31,7 +31,7 @@ struct SplashView: View {
                         .foregroundStyle(ink.opacity(0.7))
                         .tracking(2.5)
                     Text(line.isEmpty ? " " : line)
-                        .font(.ccSerifAdaptive(size: 15))
+                        .font(.system(size: 15))
                         .foregroundStyle(ink.opacity(0.85))
                         .multilineTextAlignment(.center)
                         .lineSpacing(4)
