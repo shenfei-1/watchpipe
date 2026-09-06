@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleDisplayName</key>
+	<string>留灯·聊</string>
+	<key>ITSAppUsesNonExemptEncryption</key>
+	<false/>
+	<key>NSAppTransportSecurity</key>
+	<dict>
+		<!-- iOS 10+: 任何「更具体」的 Allows 键（含 NSAllowsLocalNetworking）存在时，
+		     系统会忽略 NSAllowsArbitraryLoads（Apple ATS 文档明确行为）。
+		     5-17 加全局放行时留着 LocalNetworking，导致放行从未生效，
+		     Tailscale CGNAT 段 (100.64/10) 持续被 ATS 拦。只留 ArbitraryLoads，
+		     它本身已覆盖局域网场景。 -->
+		<key>NSAllowsArbitraryLoads</key>
+		<true/>
+	</dict>
+	<key>NSCameraUsageDescription</key>
+	<string>拍照发给 Cc</string>
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>OTS 需要访问你本地网络上的 Claude Code server</string>
+	<key>NSPhotoLibraryAddUsageDescription</key>
+	<string>OTS 把对话长图保存到相册</string>
+	<key>UIBackgroundModes</key>
+	<array>
+		<string>fetch</string>
+	</array>
+	<key>UIAppFonts</key>
+	<array>
+		<string>SourceSerif4-Regular.otf</string>
+		<string>SourceSerif4-Semibold.otf</string>
+		<string>SourceHanSerifSC-Regular.otf</string>
+		<string>SourceHanSerifSC-Bold.otf</string>
+	</array>
+</dict>
+</plist>

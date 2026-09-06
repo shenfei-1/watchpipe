@@ -1,0 +1,35 @@
+name: build-chat
+on:
+  workflow_dispatch:
+jobs:
+  build:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Toolchain
+        run: |
+          xcodebuild -version
+          xcodebuild -list -project chat-app/CcCompanion.xcodeproj
+      - name: Resolve packages
+        run: xcodebuild -resolvePackageDependencies -project chat-app/CcCompanion.xcodeproj -scheme CcCompanion
+      - name: Build (ad-hoc signed)
+        run: |
+          set -o pipefail
+          xcodebuild -project chat-app/CcCompanion.xcodeproj -scheme CcCompanion \
+            -configuration CcRelease -sdk iphoneos -derivedDataPath build \
+            CODE_SIGN_IDENTITY="-" CODE_SIGNING_REQUIRED=NO CODE_SIGNING_ALLOWED=YES \
+            AD_HOC_CODE_SIGNING_ALLOWED=YES DEVELOPMENT_TEAM="" PROVISIONING_PROFILE_SPECIFIER="" \
+            build > xcodebuild.log 2>&1 || { echo "::error::xcodebuild failed"; grep -nE "error:|BUILD" xcodebuild.log | head -80; tail -60 xcodebuild.log; exit 1; }
+          grep -nE "error:|\*\* BUILD" xcodebuild.log | head -20 || true
+          find build/Build/Products -maxdepth 2 -name "*.app" -print
+      - name: Package
+        run: |
+          APP=$(find build/Build/Products/CcRelease-iphoneos -maxdepth 1 -name "*.app" | head -1)
+          [ -n "$APP" ] || { echo "::error::no .app produced"; ls -R build/Build/Products | head -40; exit 1; }
+          codesign -d --entitlements :- "$APP" || true
+          rm -rf Payload && mkdir Payload && cp -R "$APP" Payload/ && zip -qry LiudengChat.ipa Payload
+          ls -la LiudengChat.ipa
+      - uses: actions/upload-artifact@v4
+        with:
+          name: LiudengChat-ipa
+          path: LiudengChat.ipa
