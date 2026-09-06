@@ -481,7 +481,7 @@
 				FRAMEWORK_SEARCH_PATHS = "$(inherited)";
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = CcCompanion/Info.plist;
-				INFOPLIST_KEY_CFBundleDisplayName = CcCompanion;
+				INFOPLIST_KEY_CFBundleDisplayName = "留灯·聊";
 				INFOPLIST_KEY_NSCameraUsageDescription = "拍照发给 Claude";
 				INFOPLIST_KEY_NSMicrophoneUsageDescription = "用语音跟 Claude 说话";
 				INFOPLIST_KEY_NSPhotoLibraryAddUsageDescription = "把对话长图保存到相册";
