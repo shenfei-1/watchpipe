@@ -32,6 +32,10 @@
 		<string>SourceSerif4-Semibold.otf</string>
 		<string>SourceHanSerifSC-Regular.otf</string>
 		<string>SourceHanSerifSC-Bold.otf</string>
+		<string>CormorantGaramond-300.ttf</string>
+		<string>CormorantGaramond-300Italic.ttf</string>
+		<string>CormorantGaramond-500.ttf</string>
+		<string>CormorantGaramond-500Italic.ttf</string>
 	</array>
 </dict>
 </plist>

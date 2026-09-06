@@ -53,15 +53,22 @@ struct CcCompanionApp: App {
     }
 
     private static func registerCustomFonts() {
+        // 珩 2026-09-06：加 Cormorant Garamond（OFL，开屏花体 / 底栏英文）
         let names = [
-            "SourceSerif4-Regular",
-            "SourceSerif4-Semibold",
-            "SourceHanSerifSC-Regular",
-            "SourceHanSerifSC-Bold",
+            "SourceSerif4-Regular.otf",
+            "SourceSerif4-Semibold.otf",
+            "SourceHanSerifSC-Regular.otf",
+            "SourceHanSerifSC-Bold.otf",
+            "CormorantGaramond-300.ttf",
+            "CormorantGaramond-300Italic.ttf",
+            "CormorantGaramond-500.ttf",
+            "CormorantGaramond-500Italic.ttf",
         ]
-        for n in names {
-            guard let url = Bundle.main.url(forResource: n, withExtension: "otf") else {
-                print("[CcFont] missing in bundle: \(n).otf")
+        for file in names {
+            let n = (file as NSString).deletingPathExtension
+            let ext = (file as NSString).pathExtension
+            guard let url = Bundle.main.url(forResource: n, withExtension: ext) else {
+                print("[CcFont] missing in bundle: \(file)")
                 continue
             }
             var err: Unmanaged<CFError>?
@@ -71,6 +78,7 @@ struct CcCompanionApp: App {
         }
         let han = UIFont.fontNames(forFamilyName: "Source Han Serif SC")
         let serif = UIFont.fontNames(forFamilyName: "Source Serif 4")
+        print("[CcFont] Cormorant = \(UIFont.fontNames(forFamilyName: "Cormorant Garamond"))")
         print("[CcFont] Source Han Serif SC fonts = \(han)")
         print("[CcFont] Source Serif 4 fonts = \(serif)")
     }
