@@ -19,6 +19,9 @@ final class SpeechRecognizer: ObservableObject {
     @Published var transcript: String = ""
     @Published var isRecording: Bool = false
     @Published var lastError: String? = nil
+    /// 珩 2026-09-11 打电话：通话页自己管 AVAudioSession（playAndRecord + 外放），
+    /// 置 false 后 start/stop 不再碰 category / active。
+    var managesAudioSession: Bool = true
 
     private let recognizer: SFSpeechRecognizer?
     private let audioEngine = AVAudioEngine()
@@ -58,17 +61,19 @@ final class SpeechRecognizer: ObservableObject {
         }
 
         // 设置 audio session — iOS 18 用最简 .record + .default 兼容性最好
-        let session = AVAudioSession.sharedInstance()
-        do {
-            try session.setCategory(.record, mode: .default, options: [])
-            try session.setActive(true, options: .notifyOthersOnDeactivation)
-            // 强制走默认 builtin mic (避免 stuck 在 stale ble device)
-            if let builtin = session.availableInputs?.first(where: { $0.portType == .builtInMic }) {
-                try? session.setPreferredInput(builtin)
+        if managesAudioSession {
+            let session = AVAudioSession.sharedInstance()
+            do {
+                try session.setCategory(.record, mode: .default, options: [])
+                try session.setActive(true, options: .notifyOthersOnDeactivation)
+                // 强制走默认 builtin mic (避免 stuck 在 stale ble device)
+                if let builtin = session.availableInputs?.first(where: { $0.portType == .builtInMic }) {
+                    try? session.setPreferredInput(builtin)
+                }
+            } catch {
+                self.lastError = "audio session 失败: \(error.localizedDescription)"
+                return
             }
-        } catch {
-            self.lastError = "audio session 失败: \(error.localizedDescription)"
-            return
         }
 
         let req = SFSpeechAudioBufferRecognitionRequest()
@@ -125,7 +130,9 @@ final class SpeechRecognizer: ObservableObject {
         request = nil
         task = nil
         isRecording = false
-        try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
+        if managesAudioSession {
+            try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
+        }
     }
 
     private func requestSpeechAuth() async -> SFSpeechRecognizerAuthorizationStatus {

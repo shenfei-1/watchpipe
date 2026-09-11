@@ -2219,7 +2219,8 @@ final class ChatViewModel: ObservableObject {
     /// so commit / choice paths can hand off a frozen value across the async
     /// boundary instead of racing through `vm.draft` (which the input box's
     /// onChange can blank between commit and send execution).
-    func send(text rawText: String? = nil) async {
+    /// 珩 2026-09-11 打电话：`meta` 原样放进 /chat/send 的 metadata（{"call":true,"call_id":…}），别的调用方不用管。
+    func send(text rawText: String? = nil, meta: [String: Any]? = nil) async {
         let sourceText = rawText ?? draft
         let text = sourceText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else { return }
@@ -2255,7 +2256,7 @@ final class ChatViewModel: ObservableObject {
         self.sending = true
         defer { self.sending = false }
 
-        let ok = await postChatSendOptimistic(text: text, quotedTs: quotedTsForSend, replacing: optimistic.id)
+        let ok = await postChatSendOptimistic(text: text, quotedTs: quotedTsForSend, meta: meta, replacing: optimistic.id)
         if !ok {
             self.sendingIds.remove(optimistic.id)
             self.localSendStartedAt.removeValue(forKey: optimistic.id)
@@ -2306,7 +2307,7 @@ final class ChatViewModel: ObservableObject {
     /// POST /chat/send with an 8s budget. Returns true iff the server confirmed
     /// the record. On success: removes the optimistic local-id message and
     /// inserts the server-canonical record so future polls dedupe cleanly.
-    private func postChatSendOptimistic(text: String, quotedTs: String?, replacing optimisticId: String) async -> Bool {
+    private func postChatSendOptimistic(text: String, quotedTs: String?, meta: [String: Any]? = nil, replacing optimisticId: String) async -> Bool {
         let url = CcServerConfig.serverURL.appendingPathComponent("chat/send")
         var req = URLRequest(url: url)
         req.httpMethod = "POST"
@@ -2317,6 +2318,7 @@ final class ChatViewModel: ObservableObject {
         req.timeoutInterval = 15   // 刀二 (僵尸修复): 8→15, 弱网/抖动大时 8 秒误判失败率高
         var payload: [String: Any] = ["text": text]
         if let q = quotedTs { payload["quoted_ts"] = q }
+        if let meta, !meta.isEmpty { payload["metadata"] = meta }
         req.httpBody = try? JSONSerialization.data(withJSONObject: payload)
         do {
             let (data, _) = try await session.data(for: req)
@@ -2792,6 +2794,8 @@ struct ChatView: View {
     // 2026-05-08 search 日期入口 — DatePicker sheet
     @State private var showDatePicker: Bool = false
     @State private var datePickerSelection: Date = Date()
+    // 珩 2026-09-11 打电话页
+    @State private var showCall: Bool = false
 
     var onShowFavorites: (() -> Void)? = nil
     var scrollToken: Int = 0
@@ -2965,6 +2969,7 @@ struct ChatView: View {
                     onEnterRP: {
                     },
                     onShowFavorites: onShowFavorites,
+                    onCall: { showCall = true },
                     onClearChat: { showClearChatConfirm = true }
                 )
             }
@@ -3193,6 +3198,9 @@ struct ChatView: View {
             }
         }
         #if os(iOS)
+        .fullScreenCover(isPresented: $showCall) {
+            CallView(vm: vm)
+        }
         .fullScreenCover(isPresented: $showCameraPicker) {
             CameraPicker { data in
                 editingImageData = Data(data); currentImageGenerationID = UUID()
@@ -3926,6 +3934,8 @@ private struct ChatToolbarTrailing: View {
     let onToggleSearch: () -> Void
     let onEnterRP: () -> Void
     var onShowFavorites: (() -> Void)? = nil
+    // 珩 2026-09-11 打电话入口（对讲机式语音通话，CallView）
+    var onCall: (() -> Void)? = nil
     // 珩 2026-09-06 戳一戳：状态和 sheet 都放在这个小视图里，ChatView 的大链一行不动
     @State private var showPoke: Bool = false
     // 2026-05-12 clear-button restore — 砍后重加.
@@ -3938,6 +3948,15 @@ private struct ChatToolbarTrailing: View {
                 .foregroundStyle(Color.ccAccent)
         } else {
             HStack(spacing: 12) {
+                // 珩 2026-09-11 打电话：全屏通话页
+                if let onCall {
+                    Button(action: onCall) {
+                        Image(systemName: "phone.fill")
+                            .font(.ccSerifAdaptive(size: 20, weight: .semibold))
+                            .foregroundStyle(Color.ccAccent)
+                    }
+                    .accessibilityLabel("打电话")
+                }
                 // 珩 2026-09-06 戳一戳入口：聊着聊着想戳就点开一张卡片
                 Button { showPoke = true } label: {
                     Image(systemName: "hand.point.up.left.fill")
