@@ -101,7 +101,7 @@ struct ContentView: View {
                 switch selectedTab {
                 case 0: NavigationStack { ChatView(onShowFavorites: { showFavorites = true }, scrollToken: chatScrollToken) }
                 case 1: NavigationStack { HomeWebTab(path: "home/", title: "家") }
-                case 4: NavigationStack { HomeWebTab(path: "home/album.html", title: "相册") }
+                case 4: NavigationStack { AlbumLockView { HomeWebTab(path: "home/album.html", title: "相册") } }   // 珩 2026-09-11 build 242：相册先扫脸
                 case 2: NavigationStack { CcSettingsView() }
                 case 3 where featureGroupView: NavigationStack { GroupChatView(store: groupStore) }
                 default: NavigationStack { ChatView(onShowFavorites: { showFavorites = true }, scrollToken: chatScrollToken) }

@@ -745,6 +745,9 @@ struct CcSettingsView: View {
                     }
                 }
 
+                // 珩 2026-09-11 1.3 build 242：心率管道（HealthKit 采集 + 后台投递，从 WatchPipe 搬来）
+                HealthPipeSection()
+
                 groupConfigSection
 
                 // Group 7.5 聊天字号

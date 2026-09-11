@@ -26,7 +26,13 @@ jobs:
         run: |
           APP=$(find build/Build/Products/CcRelease-iphoneos -maxdepth 1 -name "*.app" | head -1)
           [ -n "$APP" ] || { echo "::error::no .app produced"; ls -R build/Build/Products | head -40; exit 1; }
-          codesign -d --entitlements :- "$APP" || true
+          codesign -d --entitlements - --xml "$APP" > ent.plist 2>/dev/null || codesign -d --entitlements :- "$APP" > ent.plist
+          cat ent.plist
+          grep -q "com.apple.developer.healthkit<" ent.plist || { echo "::error::healthkit entitlement missing"; exit 1; }
+          grep -q "healthkit.background-delivery" ent.plist || { echo "::error::background-delivery entitlement missing"; exit 1; }
+          plutil -p "$APP/Info.plist" | grep -E "CFBundleShortVersionString|CFBundleVersion|NSHealthShareUsageDescription|NSFaceIDUsageDescription|BGTaskSchedulerPermittedIdentifiers|UIBackgroundModes" -A2 | head -40
+          plutil -p "$APP/Info.plist" | grep -q NSHealthShareUsageDescription || { echo "::error::NSHealthShareUsageDescription missing"; exit 1; }
+          plutil -p "$APP/Info.plist" | grep -q "top.bingk.liudeng.chat.refresh" || { echo "::error::BGTaskSchedulerPermittedIdentifiers missing"; exit 1; }
           rm -rf Payload && mkdir Payload && cp -R "$APP" Payload/ && zip -qry LiudengChat.ipa Payload
           ls -la LiudengChat.ipa
       - uses: actions/upload-artifact@v4

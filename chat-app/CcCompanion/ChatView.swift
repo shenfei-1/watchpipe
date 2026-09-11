@@ -224,7 +224,7 @@ extension Color {
     static var ccFloatingBarText: Color {
         switch ThemeStore.shared.theme {
         case .terminal, .night: return ccText
-        case .pink: return PinkPalette.text
+        case .pink: return PinkPalette.tabBar   // 珩 2026-09-11 build 242：底栏图标/文字改浅粉（她 9/6 定的）
         case .warm: return warmText
         }
     }

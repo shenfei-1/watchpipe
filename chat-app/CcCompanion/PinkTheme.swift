@@ -24,6 +24,8 @@ enum PinkPalette {
         "text": "#4A3B42", "textDim": "#9A8590", "accent": "#D98BA6", "userText": "#4A3B42", "assistantText": "#4A3B42",
         "bgDark": "#2A1F25", "cardDark": "#3A2B33", "assistantDark": "#8A4E6A", "userDark": "#4A353F",
         "textDark": "#FFF0F6", "textDimDark": "#D8B8C6", "accentDark": "#F2B3CB",
+        // 底栏未选中的图标线条 + 英文标签：比 #FFE4F3 深一档的浅粉，白底上看得清（珩 2026-09-11 build 242）
+        "tabBar": "#E293B4", "tabBarDark": "#EBB3C9",
     ]
     private static var cache: [String: String] = (UserDefaults.standard.dictionary(forKey: storeKey) as? [String: String]) ?? [:]
 
@@ -39,6 +41,7 @@ enum PinkPalette {
     static var text: Color { dyn("text", "textDark") }
     static var textDim: Color { dyn("textDim", "textDimDark") }
     static var accent: Color { dyn("accent", "accentDark") }
+    static var tabBar: Color { dyn("tabBar", "tabBarDark") }
     static var userText: Color { dyn("userText", "textDark") }
     static var assistantText: Color { dyn("assistantText", "textDark") }
 

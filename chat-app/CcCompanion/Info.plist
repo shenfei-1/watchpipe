@@ -22,9 +22,20 @@
 	<string>OTS 需要访问你本地网络上的 Claude Code server</string>
 	<key>NSPhotoLibraryAddUsageDescription</key>
 	<string>OTS 把对话长图保存到相册</string>
+	<key>NSHealthShareUsageDescription</key>
+	<string>读取手表的心率、血氧、睡眠等数据，上传到我们自己的服务器。</string>
+	<key>NSHealthUpdateUsageDescription</key>
+	<string>Lamp 不写入任何健康数据。</string>
+	<key>NSFaceIDUsageDescription</key>
+	<string>看相册前确认是你。</string>
 	<key>UIBackgroundModes</key>
 	<array>
 		<string>fetch</string>
+		<string>processing</string>
+	</array>
+	<key>BGTaskSchedulerPermittedIdentifiers</key>
+	<array>
+		<string>top.bingk.liudeng.chat.refresh</string>
 	</array>
 	<key>UIAppFonts</key>
 	<array>

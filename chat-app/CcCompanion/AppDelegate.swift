@@ -11,6 +11,7 @@
 
 import UIKit
 import UserNotifications
+import BackgroundTasks
 
 extension Notification.Name {
     // Phase 3 (thinking-stream-render): silent push 带 turn_id 到达 → 通知 ChatViewModel 拉 thinking.
@@ -24,7 +25,40 @@ class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCenterDele
         didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil
     ) -> Bool {
         UNUserNotificationCenter.current().delegate = self
+        // 珩 2026-09-11 1.3 build 242：心率管道（从 WatchPipe 搬来）。
+        // 观察者和后台任务必须在这里注册：后台唤醒时只会走到这里。
+        HealthLog.shared.add("app 启动")
+        BGTaskScheduler.shared.register(forTaskWithIdentifier: Self.refreshTaskID, using: nil) { task in
+            Task { @MainActor in self.handleRefresh(task) }
+        }
+        HealthSync.shared.startIfAuthorized()
+        Self.scheduleRefresh()
         return true
+    }
+
+    // MARK: - 心率管道：后台 URLSession 事件 + BGAppRefresh
+
+    static let refreshTaskID = "top.bingk.liudeng.chat.refresh"
+
+    func application(
+        _ application: UIApplication,
+        handleEventsForBackgroundURLSession identifier: String,
+        completionHandler: @escaping () -> Void
+    ) {
+        Uploader.shared.backgroundCompletionHandler = completionHandler
+        Uploader.shared.wake()
+    }
+
+    static func scheduleRefresh() {
+        let req = BGAppRefreshTaskRequest(identifier: refreshTaskID)
+        req.earliestBeginDate = Date(timeIntervalSinceNow: 60 * 60)
+        do { try BGTaskScheduler.shared.submit(req) } catch { HealthLog.shared.add("BG 刷新登记失败: \(error.localizedDescription)") }
+    }
+
+    private func handleRefresh(_ task: BGTask) {
+        Self.scheduleRefresh()
+        task.expirationHandler = { Task { @MainActor in HealthLog.shared.add("BG 刷新超时") } }
+        HealthSync.shared.syncAll(reason: "BG刷新") { task.setTaskCompleted(success: true) }
     }
 
     func application(
