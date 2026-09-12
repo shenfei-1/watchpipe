@@ -3,10 +3,18 @@
 //  CcCompanion (Lamp)
 //
 //  珩 2026-09-11 打电话 —— 对讲机式语音通话页（1.3 build 241）。
-//  进来就一直听：SFSpeechRecognizer 实时转文字，一句话稳定 0.9 秒没新字就自动发出去
-//  （前面加 "🎤 "，metadata 带 {"call":true,"call_id":…}），server 把我的回复经 speech_proxy
-//  转成 mp3 填进 audio_zh；这里收到新回复就播（外放），播的时候暂停听，播完接着听。
-//  挂断发一条 "📞 [call_end]"。
+//  进来就一直听：SFSpeechRecognizer 实时转文字，一句话稳定 0.9 秒没新字就自动发出去。
+//
+//  珩 2026-09-12（1.3 build 244）「轻装的我」语音道，默认引擎（设置 → FEATURES → 通话引擎 可切回完整对讲机）：
+//  - 进页 POST /voicelane/call/start（call_id = lamp_时间戳_随机）；一句话稳定后 POST /call/turn，
+//    用 URLSession.bytes 逐行读 SSE：text_delta 逐字上屏，sentence 的 mp3 按 generation/seq 排队播（预取），
+//    只播当前 generation；收到 cancelled 或发出新 turn 时立刻停播清队列。
+//  - 抢话：播放期间麦克风不关（playAndRecord + 外放 + 混音，输入节点开系统回声消除）；
+//    她一开口（partial ≥3 字且 0.4 秒内还在长）就停播、清队列，下一句发出去时服务端自然打断旧的。
+//  - 回声兜底：转写开头与最近 12 秒播过的句子重合的部分剥掉，整段都是回声就丢。
+//  - 她的话不再发 "🎤 …" 进主会话（避免双份注入）；挂断 POST /call/end，服务端写通话摘要。退后台超过 2 分钟也 end。
+//  - 页面底部小字：首句 x.x s（turn 发出 → 第一句音频开播）。
+//  完整引擎（旧路）：发 "🎤 文本" 到 ccc /chat/send，等回复，轮询 /call/audio 拿 mp3 播；播时暂停听。
 //
 
 import SwiftUI
@@ -18,7 +26,7 @@ import UIKit
 
 @MainActor
 final class CallController: ObservableObject {
-    enum Phase { case listening, thinking, speaking }
+    enum Phase { case connecting, listening, thinking, speaking }
 
     struct Line: Identifiable, Equatable {
         let id: String
@@ -26,16 +34,26 @@ final class CallController: ObservableObject {
         let text: String
     }
 
+    static let engineLiteKey = "call_engine_lite"
+
     @Published var phase: Phase = .listening
     @Published var lines: [Line] = []
     @Published var liveTranscript: String = ""
+    /// 轻装：我正在说的话（text_delta 逐字），done 后并入 lines
+    @Published var aiLive: String = ""
     @Published var isMuted: Bool = false
     @Published var elapsed: Int = 0
     @Published var errorText: String? = nil
     @Published private(set) var isActive: Bool = false
+    /// 轻装：本通电话最近一轮的首句延迟（turn 发出 → 第一句开播）
+    @Published var firstSentenceLatency: Double? = nil
+    /// 通话被系统性结束（后台超时 / 语音道进程没了）→ 页面自动退出
+    @Published private(set) var ended: Bool = false
 
     let callId: String
     let speech = SpeechRecognizer()
+    /// 轻装引擎（voicelane）。/call/start 失败会当场回退成完整引擎。
+    private(set) var useLane: Bool
 
     private weak var vm: ChatViewModel?
     private var cancellables = Set<AnyCancellable>()
@@ -64,18 +82,69 @@ final class CallController: ObservableObject {
         return URLSession(configuration: cfg)
     }()
 
+    // MARK: 轻装（voicelane）状态
+
+    private let laneBase: URL
+    private var laneReady = false
+    private var pendingTurn: String? = nil
+    private var turnTask: Task<Void, Never>? = nil
+    private var currentGen: String? = nil
+    /// 被抢话打断的 generation：后面再来的 sentence / text_delta 一律丢
+    private var droppedGen: String? = nil
+    private struct Clip {
+        let gen: String
+        let seq: Int
+        let text: String
+        let fetch: Task<Data?, Never>
+    }
+    private var clips: [Clip] = []
+    private var drainingClips = false
+    /// 最近播过的句子（回声过滤用）
+    private var spokenRecent: [(text: String, at: Date)] = []
+    private var lastPlaybackEnd: Date = .distantPast
+    private var echoSeenThisSegment = false
+    private var turnSentAt: Date? = nil
+    private var firstAudioMarked = false
+    private var lastPartialLen: Int = 0
+    private var lastPartialAt: Date = .distantPast
+    private var backgroundEndTask: Task<Void, Never>? = nil
+    private let laneSession: URLSession = {
+        let cfg = URLSessionConfiguration.default
+        cfg.timeoutIntervalForRequest = 90      // SSE 两个字节之间最长等 90 秒
+        cfg.timeoutIntervalForResource = 600
+        cfg.requestCachePolicy = .reloadIgnoringLocalCacheData
+        return URLSession(configuration: cfg)
+    }()
+
     init(vm: ChatViewModel) {
         self.vm = vm
-        self.callId = String(UUID().uuidString.prefix(8)).lowercased()
+        let lite = UserDefaults.standard.object(forKey: Self.engineLiteKey) as? Bool ?? true
+        self.useLane = lite
+        if lite {
+            let ts = Int(Date().timeIntervalSince1970)
+            let rnd = String(UUID().uuidString.prefix(6)).lowercased()
+            self.callId = "lamp_\(ts)_\(rnd)"
+        } else {
+            self.callId = String(UUID().uuidString.prefix(8)).lowercased()
+        }
+        self.laneBase = Self.laneBaseURL()
+    }
+
+    /// https://bing-k.top/ccc → https://bing-k.top/voicelane
+    static func laneBaseURL() -> URL {
+        var c = URLComponents(url: CcServerConfig.serverURL, resolvingAgainstBaseURL: false)
+        c?.path = "/voicelane"
+        c?.query = nil
+        return c?.url ?? URL(string: "https://bing-k.top/voicelane")!
     }
 
     // MARK: lifecycle
 
     func start() {
-        guard !isActive, !torndown, let vm else { return }
+        guard !isActive, !torndown, vm != nil else { return }
         isActive = true
-        seenIds = Set(vm.messages.map(\.id))
         speech.managesAudioSession = false
+        speech.voiceProcessing = useLane
         // SFSpeech 单次任务约 60 秒到头 / 出错自己结束 → 还在通话就立刻重开，不等看门狗那 1 秒
         speech.onTaskEnded = { [weak self] _ in
             guard let self, self.isActive else { return }
@@ -84,19 +153,25 @@ final class CallController: ObservableObject {
         configureAudioSession()
         UIApplication.shared.isIdleTimerDisabled = true
 
+        // 正在听到的：字幕 + 抢话判断 + 回声过滤
+        speech.$transcript
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] t in self?.onPartial(t) }
+            .store(in: &cancellables)
+
         // 一句话说完（0.9 秒没新字）→ 发出去
         speech.$transcript
             .receive(on: DispatchQueue.main)
-            .handleEvents(receiveOutput: { [weak self] t in self?.liveTranscript = t })
             .debounce(for: .seconds(0.9), scheduler: DispatchQueue.main)
             .sink { [weak self] t in self?.commitIfStable(t) }
             .store(in: &cancellables)
 
-        // 珩的新回复
-        vm.$messages
-            .receive(on: DispatchQueue.main)
-            .sink { [weak self] msgs in self?.ingest(msgs) }
-            .store(in: &cancellables)
+        if useLane {
+            phase = .connecting
+            Task { await laneStart() }
+        } else {
+            subscribeFullEngine()
+        }
 
         // 每秒：计时 + 看门狗（识别任务自己结束了就重开；想太久就回到听）
         tickTask = Task { [weak self] in
@@ -114,13 +189,30 @@ final class CallController: ObservableObject {
         Task { await resumeListeningIfNeeded() }
     }
 
-    /// 挂断：停一切 + 发 call_end。
+    /// 完整引擎：珩的新回复从主会话来
+    private func subscribeFullEngine() {
+        guard let vm else { return }
+        seenIds = Set(vm.messages.map(\.id))
+        vm.$messages
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] msgs in self?.ingest(msgs) }
+            .store(in: &cancellables)
+    }
+
+    /// 挂断：停一切 + 通知服务端。
     func hangUp() {
         guard isActive else { return }
-        let vm = self.vm
-        let cid = callId
-        teardown()
-        Task { await vm?.send(text: "📞 [call_end]", meta: ["call": false, "call_end": true, "call_id": cid]) }
+        if useLane {
+            let req = laneRequest("call/end", json: ["call_id": callId])
+            let s = laneSession
+            teardown()
+            Task.detached { _ = try? await s.data(for: req) }
+        } else {
+            let vm = self.vm
+            let cid = callId
+            teardown()
+            Task { await vm?.send(text: "📞 [call_end]", meta: ["call": false, "call_end": true, "call_id": cid]) }
+        }
     }
 
     /// 只收尾不发消息（页面被别的方式关掉时兜底）。幂等。
@@ -130,14 +222,14 @@ final class CallController: ObservableObject {
         isActive = false
         tickTask?.cancel()
         tickTask = nil
+        backgroundEndTask?.cancel()
+        backgroundEndTask = nil
+        turnTask?.cancel()
+        turnTask = nil
         cancellables.removeAll()
         speech.onTaskEnded = nil
         speech.stop()
-        player?.delegate = nil
-        player?.stop()
-        player = nil
-        playbackWaiter?.cancel()
-        playbackWaiter = nil
+        stopPlayback(clearQueue: true)
         queue.removeAll()
         UIApplication.shared.isIdleTimerDisabled = false
         try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
@@ -148,7 +240,22 @@ final class CallController: ObservableObject {
         if !fg {
             speech.stop()
             liveTranscript = ""
+            if useLane {
+                // 退后台：先停播；超过 2 分钟没回来就结束这通电话
+                stopPlayback(clearQueue: true)
+                if phase == .speaking { phase = .listening }
+                backgroundEndTask?.cancel()
+                backgroundEndTask = Task { [weak self] in
+                    try? await Task.sleep(nanoseconds: 120_000_000_000)
+                    guard let self, !Task.isCancelled, self.isActive, !self.inForeground else { return }
+                    self.errorText = "后台太久，电话挂了"
+                    self.hangUp()
+                    self.ended = true
+                }
+            }
         } else if isActive {
+            backgroundEndTask?.cancel()
+            backgroundEndTask = nil
             configureAudioSession()
             Task { await resumeListeningIfNeeded() }
         }
@@ -172,7 +279,9 @@ final class CallController: ObservableObject {
     private func configureAudioSession() {
         let s = AVAudioSession.sharedInstance()
         do {
-            try s.setCategory(.playAndRecord, mode: .default, options: [.defaultToSpeaker])
+            // 轻装：播放时麦克风照开，允许混音；完整：播放/收音轮流
+            let opts: AVAudioSession.CategoryOptions = useLane ? [.defaultToSpeaker, .mixWithOthers] : [.defaultToSpeaker]
+            try s.setCategory(.playAndRecord, mode: .default, options: opts)
             try s.setActive(true)
             if let builtin = s.availableInputs?.first(where: { $0.portType == .builtInMic }) {
                 try? s.setPreferredInput(builtin)
@@ -187,19 +296,24 @@ final class CallController: ObservableObject {
     /// 看门狗 / 各处唤起：phase 在听、麦克风却没在跑 → 重开一次。
     /// "isRecording 为真但 audioEngine 没在跑" 也算坏了（旧 engine 挂着老格式的 tap 就是这种半截状态）。
     /// 连续失败满 maxMicRetries 次就停手，页面提示；静音键点两下重置计数再试。
+    /// 轻装引擎：播放期间也开着（抢话靠它）。
     private func resumeListeningIfNeeded() async {
-        guard isActive, inForeground, !isMuted, phase != .speaking, !restarting else { return }
+        guard isActive, inForeground, !isMuted, !restarting else { return }
+        if !useLane && phase == .speaking { return }
         if speech.isRecording && speech.isEngineRunning { return }
         guard micRetryCount < maxMicRetries else { return }
         restarting = true
         defer { restarting = false }
         if speech.isRecording { speech.stop() }
         // 播完 mp3 / 路由变化之后 session 可能已经不是 playAndRecord+外放，先摆回来再建 engine
-        configureAudioSession()
+        if !useLane || player == nil { configureAudioSession() }
         await speech.start()
         guard isActive else { return }
         if speech.isRecording && speech.isEngineRunning {
             micRetryCount = 0
+            echoSeenThisSegment = false
+            lastPartialLen = 0
+            lastPartialAt = .distantPast
             if errorText == Self.micFailedText || (speech.lastError ?? "").isEmpty { errorText = nil }
         } else {
             micRetryCount += 1
@@ -211,22 +325,75 @@ final class CallController: ObservableObject {
         }
     }
 
+    /// 每次 partial：字幕 +（轻装）回声过滤 + 抢话判断
+    private func onPartial(_ raw: String) {
+        let t = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard useLane else { liveTranscript = t; return }
+        var shown = t
+        switch filterEcho(t) {
+        case .echo:
+            echoSeenThisSegment = true
+            liveTranscript = ""
+            return
+        case .partialEcho(let rest):
+            echoSeenThisSegment = true
+            shown = rest
+        case .clean:
+            break
+        }
+        liveTranscript = shown
+        let n = shown.count
+        let now = Date()
+        if phase == .speaking, n >= 3, n > lastPartialLen, now.timeIntervalSince(lastPartialAt) < 0.4 {
+            bargeIn()
+        }
+        if n != lastPartialLen {
+            lastPartialLen = n
+            lastPartialAt = now
+        }
+    }
+
     private func commitIfStable(_ raw: String) {
-        guard isActive, !isMuted, phase != .speaking, speech.isRecording else { return }
-        let text = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard isActive, !isMuted, speech.isRecording else { return }
+        if !useLane && phase == .speaking { return }
+        var text = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else { return }
+        if useLane {
+            switch filterEcho(text) {
+            case .echo:
+                // 整段都是回声：清掉这段识别，重新开听
+                liveTranscript = ""
+                speech.stop()
+                Task { await resumeListeningIfNeeded() }
+                return
+            case .partialEcho(let rest):
+                text = rest
+            case .clean:
+                break
+            }
+            guard !text.isEmpty else { return }
+        }
         // 识别任务 stop 后可能再吐一次 final 结果，5 秒内同一句不重发
         if text == lastCommitted, Date().timeIntervalSince(lastCommitAt) < 5 { return }
         lastCommitted = text
         lastCommitAt = Date()
         liveTranscript = ""
-        speech.stop()   // 结束这段识别；看门狗 1 秒内重开
+        speech.stop()   // 结束这段识别；轻装立刻重开，完整由看门狗 1 秒内重开
         appendLine(Line(id: "u-\(lastCommitAt.timeIntervalSince1970)", isUser: true, text: text))
         phase = .thinking
         thinkingSince = Date()
-        let cid = callId
-        Task { [weak vm] in
-            await vm?.send(text: "🎤 " + text, meta: ["call": true, "call_id": cid])
+        if useLane {
+            Task { await resumeListeningIfNeeded() }
+            if laneReady {
+                sendTurn(text)
+            } else {
+                pendingTurn = text
+            }
+        } else {
+            let cid = callId
+            Task { [weak vm] in
+                await vm?.send(text: "🎤 " + text, meta: ["call": true, "call_id": cid])
+            }
         }
     }
 
@@ -235,7 +402,279 @@ final class CallController: ObservableObject {
         if lines.count > 6 { lines.removeFirst(lines.count - 6) }
     }
 
-    // MARK: receiving
+    // MARK: 回声过滤
+
+    private static func normalize(_ s: String) -> String {
+        var out = String.UnicodeScalarView()
+        for u in s.unicodeScalars where CharacterSet.alphanumerics.contains(u) { out.append(u) }
+        return String(out)
+    }
+
+    private enum EchoVerdict { case clean, partialEcho(String), echo }
+
+    /// 转写开头与最近 12 秒播过的句子重合 → 剥掉重合的整句；剩下太短就整段当回声。
+    /// 剥不掉但开头 6 个字出现在播过的句子里 → 整段当回声。
+    private func filterEcho(_ t: String) -> EchoVerdict {
+        let norm = Self.normalize(t)
+        guard norm.count >= 3 else { return .clean }
+        let cutoff = Date().addingTimeInterval(-12)
+        let recent = spokenRecent.filter { $0.at > cutoff }.map { Self.normalize($0.text) }.filter { $0.count >= 2 }
+        guard !recent.isEmpty else { return .clean }
+        var rest = Substring(norm)
+        var stripped = false
+        var again = true
+        while again && !rest.isEmpty {
+            again = false
+            for s in recent where rest.hasPrefix(s) {
+                rest = rest.dropFirst(s.count)
+                stripped = true
+                again = true
+            }
+        }
+        if stripped {
+            return rest.count >= 2 ? .partialEcho(String(rest)) : .echo
+        }
+        let key = String(norm.prefix(6))
+        if recent.contains(where: { $0.contains(key) }) { return .echo }
+        return .clean
+    }
+
+    // MARK: 轻装：语音道
+
+    private func laneURL(_ path: String) -> URL {
+        let p = path.hasPrefix("/") ? String(path.dropFirst()) : path
+        return laneBase.appendingPathComponent(p)
+    }
+
+    private func laneRequest(_ path: String, json: [String: Any]) -> URLRequest {
+        var req = CcServerConfig.authenticatedRequest(url: laneURL(path), method: "POST")
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        req.setValue("text/event-stream, application/json", forHTTPHeaderField: "Accept")
+        req.httpBody = try? JSONSerialization.data(withJSONObject: json)
+        return req
+    }
+
+    private func laneStart() async {
+        let req = laneRequest("call/start", json: ["call_id": callId])
+        var ok = false
+        var why = ""
+        do {
+            let (data, resp) = try await laneSession.data(for: req)
+            let code = (resp as? HTTPURLResponse)?.statusCode ?? 0
+            ok = code == 200
+            if !ok { why = "HTTP \(code) \(String(data: data.prefix(80), encoding: .utf8) ?? "")" }
+        } catch {
+            why = error.localizedDescription
+        }
+        guard isActive else { return }
+        if ok {
+            laneReady = true
+            if phase == .connecting { phase = .listening }
+            if let p = pendingTurn {
+                pendingTurn = nil
+                phase = .thinking
+                thinkingSince = Date()
+                sendTurn(p)
+            }
+        } else {
+            // 语音道没接通 → 当场回退完整引擎（旧路）
+            useLane = false
+            speech.voiceProcessing = false
+            errorText = "轻装通道没接通（\(why)），改走完整通话"
+            subscribeFullEngine()
+            if phase == .connecting { phase = .listening }
+            if let p = pendingTurn {
+                pendingTurn = nil
+                let cid = callId
+                Task { [weak vm] in await vm?.send(text: "🎤 " + p, meta: ["call": true, "call_id": cid]) }
+            }
+        }
+    }
+
+    private func sendTurn(_ text: String) {
+        turnTask?.cancel()
+        turnTask = nil
+        stopPlayback(clearQueue: true)
+        droppedGen = nil
+        currentGen = nil
+        aiLive = ""
+        phase = .thinking
+        thinkingSince = Date()
+        turnSentAt = Date()
+        firstAudioMarked = false
+        let req = laneRequest("call/turn", json: ["call_id": callId, "text": text])
+        turnTask = Task { [weak self] in await self?.readTurnStream(req) }
+    }
+
+    private func readTurnStream(_ req: URLRequest) async {
+        var gen: String? = nil
+        do {
+            let (bytes, resp) = try await laneSession.bytes(for: req)
+            let code = (resp as? HTTPURLResponse)?.statusCode ?? 0
+            guard code == 200 else {
+                guard isActive, !Task.isCancelled else { return }
+                if code == 404 || code == 410 {
+                    errorText = "语音道断了（\(code)），重新接…"
+                    laneReady = false
+                    if phase == .thinking { phase = .listening }
+                    await laneStart()
+                } else {
+                    errorText = "语音道 HTTP \(code)"
+                    if phase == .thinking { phase = .listening }
+                }
+                return
+            }
+            for try await line in bytes.lines {
+                guard !Task.isCancelled, isActive else { return }
+                guard line.hasPrefix("data:") else { continue }
+                let payload = line.dropFirst(5).trimmingCharacters(in: .whitespaces)
+                guard let d = payload.data(using: .utf8),
+                      let obj = try? JSONSerialization.jsonObject(with: d) as? [String: Any],
+                      let type = obj["type"] as? String else { continue }
+                if type == "start" {
+                    gen = obj["generation_id"] as? String
+                    currentGen = gen
+                    droppedGen = nil
+                    continue
+                }
+                guard let g = gen, g == currentGen, g != droppedGen else { continue }
+                switch type {
+                case "text_delta":
+                    if let t = obj["text"] as? String { aiLive += t }
+                case "sentence":
+                    guard let seq = obj["seq"] as? Int, let text = obj["text"] as? String else { continue }
+                    guard let path = obj["audio_url"] as? String, !path.isEmpty else { continue }   // 这句合成失败：只上字幕
+                    let url = laneURL(path)
+                    let s = laneSession
+                    let fetch = Task<Data?, Never>.detached {
+                        guard let (data, resp) = try? await s.data(for: CcServerConfig.authenticatedRequest(url: url)),
+                              (resp as? HTTPURLResponse)?.statusCode == 200, data.count > 100 else { return nil }
+                        return data
+                    }
+                    clips.append(Clip(gen: g, seq: seq, text: text, fetch: fetch))
+                    drainClips()
+                case "cancelled":
+                    stopPlayback(clearQueue: true)
+                    if phase != .connecting { phase = .listening }
+                    return
+                case "done":
+                    let full = (obj["text"] as? String ?? aiLive).trimmingCharacters(in: .whitespacesAndNewlines)
+                    if !full.isEmpty { appendLine(Line(id: "a-\(g)-\(Date().timeIntervalSince1970)", isUser: false, text: full)) }
+                    aiLive = ""
+                    thinkingSince = nil
+                    if phase == .thinking && clips.isEmpty && !drainingClips { phase = .listening }
+                    return
+                case "error":
+                    errorText = obj["message"] as? String ?? "语音道出错"
+                    if phase == .thinking { phase = .listening }
+                default:
+                    break
+                }
+            }
+            // 流正常结束但没等到 done
+            if phase == .thinking && clips.isEmpty && !drainingClips { phase = .listening }
+        } catch {
+            guard !Task.isCancelled, isActive else { return }
+            errorText = "语音道断了: \(error.localizedDescription)"
+            if phase == .thinking { phase = .listening }
+        }
+    }
+
+    /// 抢话：她一开口就停播、清队列；这一轮的后续句子全丢。下一句发出去时服务端会打断旧的。
+    private func bargeIn() {
+        guard phase == .speaking else { return }
+        droppedGen = currentGen
+        turnTask?.cancel()
+        turnTask = nil
+        stopPlayback(clearQueue: true)
+        if !aiLive.isEmpty {
+            appendLine(Line(id: "a-cut-\(Date().timeIntervalSince1970)", isUser: false, text: aiLive + "…"))
+            aiLive = ""
+        }
+        phase = .listening
+    }
+
+    private func stopPlayback(clearQueue: Bool) {
+        if clearQueue {
+            for c in clips { c.fetch.cancel() }
+            clips.removeAll()
+        }
+        if let p = player {
+            p.delegate = nil
+            p.stop()
+            player = nil
+            lastPlaybackEnd = Date()
+        }
+        playbackWaiter?.cancel()
+        playbackWaiter = nil
+    }
+
+    private func drainClips() {
+        guard isActive, !drainingClips else { return }
+        guard !clips.isEmpty else {
+            if phase == .speaking {
+                phase = .listening
+                lastPlaybackEnd = Date()
+                // 这段识别里混进过回声 → 换一段干净的
+                if echoSeenThisSegment {
+                    speech.stop()
+                    liveTranscript = ""
+                    Task { await resumeListeningIfNeeded() }
+                }
+            }
+            return
+        }
+        let clip = clips.removeFirst()
+        guard clip.gen == currentGen, clip.gen != droppedGen else {
+            clip.fetch.cancel()
+            drainClips()
+            return
+        }
+        drainingClips = true
+        Task {
+            let data = await clip.fetch.value
+            if let data, isActive, clip.gen == currentGen, clip.gen != droppedGen {
+                if !firstAudioMarked, let t0 = turnSentAt {
+                    firstAudioMarked = true
+                    firstSentenceLatency = Date().timeIntervalSince(t0)
+                }
+                spokenRecent.append((text: clip.text, at: Date()))
+                if spokenRecent.count > 40 { spokenRecent.removeFirst(spokenRecent.count - 40) }
+                phase = .speaking
+                thinkingSince = nil
+                await playClip(data)
+            }
+            drainingClips = false
+            drainClips()
+        }
+    }
+
+    /// 轻装：播一句；麦克风保持开着。
+    private func playClip(_ data: Data) async {
+        do {
+            let s = AVAudioSession.sharedInstance()
+            if s.category != .playAndRecord { configureAudioSession() }
+            let p = try AVAudioPlayer(data: data)
+            p.volume = 1.0
+            let waiter = PlaybackWaiter()
+            p.delegate = waiter
+            playbackWaiter = waiter
+            p.prepareToPlay()
+            player = p
+            let duration = p.duration
+            if p.play() {
+                await waiter.wait(timeout: max(1.0, duration + 3.0))
+            }
+            p.delegate = nil
+        } catch {
+            errorText = "播放失败: \(error.localizedDescription)"
+        }
+        playbackWaiter = nil
+        player = nil
+        lastPlaybackEnd = Date()
+    }
+
+    // MARK: 完整引擎：receiving
 
     private func ingest(_ msgs: [ChatMessage]) {
         guard isActive else { return }
@@ -316,7 +755,7 @@ final class CallController: ObservableObject {
         return nil
     }
 
-    // MARK: playback
+    // MARK: 完整引擎：playback
 
     private func play(_ url: URL) async {
         speech.stop()
@@ -410,11 +849,12 @@ struct CallView: View {
 
     private var statusText: String {
         switch call.phase {
+        case .connecting: return "接通中…"
         case .speaking: return "\(aiName)在说"
         case .thinking: return "\(aiName)在想…"
         case .listening:
             if call.isMuted { return "已静音" }
-            if vm.isCcTyping { return "\(aiName)在想…" }
+            if !call.useLane && vm.isCcTyping { return "\(aiName)在想…" }
             return "我在听"
         }
     }
@@ -426,10 +866,17 @@ struct CallView: View {
 
     private var ringColor: Color {
         switch call.phase {
+        case .connecting: return Color.ccTextDim.opacity(0.6)
         case .speaking: return Color.ccAccent
         case .thinking: return Color.ccTextDim
         case .listening: return call.isMuted ? Color.ccTextDim.opacity(0.4) : Color.ccAssistant
         }
+    }
+
+    private var hintText: String {
+        if call.isMuted { return "点一下麦克风继续说" }
+        if call.useLane { return "直接说话就行，停一下我就接；我说的时候你也可以插嘴" }
+        return "直接说话就行，停一下我就发出去"
     }
 
     var body: some View {
@@ -473,9 +920,9 @@ struct CallView: View {
                     .padding(.top, 22)
                     .animation(.easeInOut(duration: 0.2), value: statusText)
 
-                // 字幕：最近两句 + 正在听到的
+                // 字幕：最近两句 + 我正在说的（逐字）+ 正在听到的
                 VStack(alignment: .leading, spacing: 10) {
-                    ForEach(call.lines.suffix(2)) { line in
+                    ForEach(call.lines.suffix(call.aiLive.isEmpty ? 2 : 1)) { line in
                         HStack(alignment: .top, spacing: 8) {
                             Text(line.isUser ? "你" : aiName)
                                 .font(.ccSerifAdaptive(size: 13, weight: .semibold))
@@ -485,6 +932,19 @@ struct CallView: View {
                                 .font(.system(size: 16))
                                 .foregroundStyle(Color.ccText)
                                 .lineLimit(3)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                        }
+                    }
+                    if !call.aiLive.isEmpty {
+                        HStack(alignment: .top, spacing: 8) {
+                            Text(aiName)
+                                .font(.ccSerifAdaptive(size: 13, weight: .semibold))
+                                .foregroundStyle(Color.ccAccent)
+                                .frame(width: 34, alignment: .trailing)
+                            Text(call.aiLive)
+                                .font(.system(size: 16))
+                                .foregroundStyle(Color.ccText)
+                                .lineLimit(4)
                                 .frame(maxWidth: .infinity, alignment: .leading)
                         }
                     }
@@ -501,8 +961,8 @@ struct CallView: View {
                                 .frame(maxWidth: .infinity, alignment: .leading)
                         }
                     }
-                    if call.lines.isEmpty && call.liveTranscript.isEmpty {
-                        Text(call.isMuted ? "点一下麦克风继续说" : "直接说话就行，停一下我就发出去")
+                    if call.lines.isEmpty && call.liveTranscript.isEmpty && call.aiLive.isEmpty {
+                        Text(hintText)
                             .font(.system(size: 14))
                             .foregroundStyle(Color.ccTextDim)
                             .frame(maxWidth: .infinity, alignment: .center)
@@ -558,13 +1018,28 @@ struct CallView: View {
                             .foregroundStyle(Color.ccTextDim)
                     }
                 }
-                .padding(.bottom, 48)
+                .padding(.bottom, 16)
+
+                // 底部小字：引擎 + 首句延迟
+                HStack(spacing: 6) {
+                    Text(call.useLane ? "轻装" : "完整")
+                    if let l = call.firstSentenceLatency {
+                        Text("·")
+                        Text(String(format: "首句 %.1f s", l))
+                    }
+                }
+                .font(.system(size: 11, design: .monospaced))
+                .foregroundStyle(Color.ccTextDim.opacity(0.7))
+                .padding(.bottom, 24)
             }
         }
         .onAppear { call.start() }
         .onDisappear { call.teardown() }
         .onChange(of: scenePhase) { _, phase in
             call.setForeground(phase == .active)
+        }
+        .onChange(of: call.ended) { _, e in
+            if e { dismiss() }
         }
         .interactiveDismissDisabled(true)
     }

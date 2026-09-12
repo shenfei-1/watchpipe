@@ -33,6 +33,10 @@ final class SpeechRecognizer: ObservableObject {
     /// 识别任务不是被 stop() 结束、而是自己结束（final / error / 60 秒上限）时回调。
     /// 通话页用它立刻重开收音。回调在主线程。
     var onTaskEnded: ((_ error: Error?) -> Void)? = nil
+    /// 珩 2026-09-12（1.3 build 244）轻装电话：播放时麦克风不关，输入节点开系统回声消除
+    /// （setVoiceProcessingEnabled）。开失败（格式无效 / engine 起不来）自动退回普通输入，之后不再试。
+    var voiceProcessing: Bool = false
+    private var voiceProcessingFailed = false
 
     private let recognizer: SFSpeechRecognizer?
     private var audioEngine: AVAudioEngine? = nil
@@ -110,7 +114,16 @@ final class SpeechRecognizer: ObservableObject {
         let engine = AVAudioEngine()
         self.audioEngine = engine
         let inputNode = engine.inputNode
-        let format = inputNode.outputFormat(forBus: 0)
+        let wantVP = voiceProcessing && !voiceProcessingFailed
+        if wantVP {
+            do { try inputNode.setVoiceProcessingEnabled(true) } catch { voiceProcessingFailed = true }
+        }
+        var format = inputNode.outputFormat(forBus: 0)
+        if (format.sampleRate <= 0 || format.channelCount == 0), inputNode.isVoiceProcessingEnabled {
+            voiceProcessingFailed = true
+            try? inputNode.setVoiceProcessingEnabled(false)
+            format = inputNode.outputFormat(forBus: 0)
+        }
         guard format.sampleRate > 0, format.channelCount > 0 else {
             self.lastError = "麦克风格式无效（\(Int(format.sampleRate))Hz）"
             tearDownEngine()
@@ -127,6 +140,8 @@ final class SpeechRecognizer: ObservableObject {
         } catch {
             self.lastError = "录音启动失败: \(error.localizedDescription)"
             tearDownEngine()
+            // 开着回声消除起不来 → 记下，下一次（看门狗 1 秒内）用普通输入再试
+            if inputNode.isVoiceProcessingEnabled { voiceProcessingFailed = true }
             return
         }
 

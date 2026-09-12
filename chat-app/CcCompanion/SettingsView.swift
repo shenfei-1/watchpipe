@@ -564,6 +564,8 @@ struct CcSettingsView: View {
     @AppStorage("chat_font_size_level") private var chatFontLevel: String = "medium"
     // Phase D 2026-05-11 — "仿 cc 终端文字" default true (旧行为). 关掉显示 "[AI名字] 正在输入..."
     @AppStorage("typing_verbs_enabled") private var typingVerbsEnabled: Bool = true
+    // 珩 2026-09-12 1.3 build 244：电话页引擎——开=轻装（voicelane 语音道，能插嘴）；关=完整（走主会话的对讲机）
+    @AppStorage(CallController.engineLiteKey) private var callEngineLite: Bool = true
 
     @AppStorage("debug_unlocked") private var debugUnlocked: Bool = false
 
@@ -739,6 +741,7 @@ struct CcSettingsView: View {
                 // Group 7 FEATURES (大砍版)
                 section("FEATURES") {
                     toggleRow("仿ClaudeCode趣味Thinking文字", binding: $typingVerbsEnabled)
+                    toggleRow("通话引擎：轻装（关＝完整）", binding: $callEngineLite)
                     toggleRow("新消息通知", binding: $notifyOnPollingAssistant)
                     toggleRowWithInfo("决策提示触感和声效", binding: $enableDecisionHaptic) {
                         showHapticInfo = true
