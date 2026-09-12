@@ -104,6 +104,9 @@ final class CallController: ObservableObject {
     private var lastPlaybackEnd: Date = .distantPast
     private var echoSeenThisSegment = false
     private var turnSentAt: Date? = nil
+    /// 这一轮的 SSE 还开着（done / cancelled / error / 断流 之前）：句子还在路上，队列空了也别急着切回"在听"
+    private var turnOpen = false
+    private var turnSerial = 0
     private var firstAudioMarked = false
     private var lastPartialLen: Int = 0
     private var lastPartialAt: Date = .distantPast
@@ -502,8 +505,35 @@ final class CallController: ObservableObject {
         thinkingSince = Date()
         turnSentAt = Date()
         firstAudioMarked = false
+        turnOpen = true
+        turnSerial += 1
+        let serial = turnSerial
         let req = laneRequest("call/turn", json: ["call_id": callId, "text": text])
-        turnTask = Task { [weak self] in await self?.readTurnStream(req) }
+        turnTask = Task { [weak self] in
+            await self?.readTurnStream(req)
+            self?.turnClosed(serial)
+        }
+    }
+
+    /// 这一轮的流结束了（不管怎么结束的）：句子都播完了就回到"在听"。旧轮的收尾（被新轮 cancel 的）不动新轮。
+    private func turnClosed(_ serial: Int) {
+        guard serial == turnSerial else { return }
+        turnOpen = false
+        guard isActive else { return }
+        if clips.isEmpty && !drainingClips && phase != .connecting {
+            settleToListening()
+        }
+    }
+
+    /// 回到"在听"；这段识别里混进过回声就换一段干净的
+    private func settleToListening() {
+        phase = .listening
+        thinkingSince = nil
+        if echoSeenThisSegment {
+            speech.stop()
+            liveTranscript = ""
+            Task { await resumeListeningIfNeeded() }
+        }
     }
 
     private func readTurnStream(_ req: URLRequest) async {
@@ -562,7 +592,6 @@ final class CallController: ObservableObject {
                     if !full.isEmpty { appendLine(Line(id: "a-\(g)-\(Date().timeIntervalSince1970)", isUser: false, text: full)) }
                     aiLive = ""
                     thinkingSince = nil
-                    if phase == .thinking && clips.isEmpty && !drainingClips { phase = .listening }
                     return
                 case "error":
                     errorText = obj["message"] as? String ?? "语音道出错"
@@ -571,8 +600,6 @@ final class CallController: ObservableObject {
                     break
                 }
             }
-            // 流正常结束但没等到 done
-            if phase == .thinking && clips.isEmpty && !drainingClips { phase = .listening }
         } catch {
             guard !Task.isCancelled, isActive else { return }
             errorText = "语音道断了: \(error.localizedDescription)"
@@ -612,16 +639,8 @@ final class CallController: ObservableObject {
     private func drainClips() {
         guard isActive, !drainingClips else { return }
         guard !clips.isEmpty else {
-            if phase == .speaking {
-                phase = .listening
-                lastPlaybackEnd = Date()
-                // 这段识别里混进过回声 → 换一段干净的
-                if echoSeenThisSegment {
-                    speech.stop()
-                    liveTranscript = ""
-                    Task { await resumeListeningIfNeeded() }
-                }
-            }
+            // 流还开着 → 下一句在路上，保持"在说"；流关了才回到"在听"
+            if phase == .speaking && !turnOpen { settleToListening() }
             return
         }
         let clip = clips.removeFirst()
