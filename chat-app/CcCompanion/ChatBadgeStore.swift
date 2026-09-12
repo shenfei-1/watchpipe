@@ -63,7 +63,8 @@ final class ChatBadgeStore: ObservableObject {
             items.append(URLQueryItem(name: "since", value: since))
         }
         components?.queryItems = items
-        guard let finalURL = components?.url else { return }
+        // build 243：since 里的 "+08:00" 要转义成 %2B，否则服务端当空格、长轮询不挂
+        guard let finalURL = components?.ccPlusSafeURL else { return }
         let request = CcServerConfig.authenticatedRequest(url: finalURL)
         do {
             let (data, _) = try await URLSession.shared.data(for: request)
@@ -72,7 +73,7 @@ final class ChatBadgeStore: ObservableObject {
             let baseline = lastSeenTs
             let active = isChatTabActive
             var sawNewer = false
-            for r in decoded.records where r.role != "user" && r.role != "task" {
+            for r in decoded.chat.newRecords where r.role != "user" && r.role != "task" {
                 if !baseline.isEmpty && r.ts > baseline {
                     if !active {
                         unreadCount += 1
@@ -87,7 +88,7 @@ final class ChatBadgeStore: ObservableObject {
                 }
             }
             // 如果 server 给的 last_ts 比本地新, 更新 latestKnownTs (不算 unread, 只追 baseline)
-            if let last = decoded.lastTs, last > latestKnownTs {
+            if let last = decoded.chat.lastTs, last > latestKnownTs {
                 latestKnownTs = last
             }
             // Build 218 B1 — chat tab 在屏时, 把新消息 baseline 推进到最新已知, 防止下次轮询又算 unread
@@ -102,12 +103,18 @@ final class ChatBadgeStore: ObservableObject {
 }
 
 /// 最小 schema — 只要 ts / role 算 unread, 不解析 text/attachment 节省 cpu.
+/// 珩 2026-09-12 build 243：/chat/poll 的结构是 {chat:{new_records:[…], last_ts}}，之前按顶层 records 解，
+/// 每次都解码失败 → since 永远为空 → 每 5 秒全量拉 50 条（17KB）。修成对的路径后带 since 长轮询，一次 ≈ 25 秒。
 private struct BadgePollResponse: Codable {
-    let records: [BadgeRecord]
+    let chat: BadgePollChat
+}
+
+private struct BadgePollChat: Codable {
+    let newRecords: [BadgeRecord]
     let lastTs: String?
 
     enum CodingKeys: String, CodingKey {
-        case records
+        case newRecords = "new_records"
         case lastTs = "last_ts"
     }
 }

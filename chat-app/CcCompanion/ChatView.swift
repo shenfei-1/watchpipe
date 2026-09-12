@@ -497,7 +497,7 @@ actor ChatNetworkClient {
         if let since { items.append(URLQueryItem(name: "since", value: since)) }
         if let etag { items.append(URLQueryItem(name: "etag", value: etag)) }
         components?.queryItems = items
-        guard let finalURL = components?.url else { throw URLError(.badURL) }
+        guard let finalURL = components?.ccPlusSafeURL else { throw URLError(.badURL) }
         var request = CcServerConfig.authenticatedRequest(url: finalURL)
         request.timeoutInterval = 30
         let (data, _) = try await session.data(for: request)
@@ -535,7 +535,7 @@ actor ChatNetworkClient {
             URLQueryItem(name: "turn_id", value: turnId),
             URLQueryItem(name: "limit", value: String(limit)),
         ]
-        guard let finalURL = components?.url else { return nil }
+        guard let finalURL = components?.ccPlusSafeURL else { return nil }
         var request = CcServerConfig.authenticatedRequest(url: finalURL)
         request.timeoutInterval = 20
         guard let (data, response) = try? await session.data(for: request),
@@ -970,7 +970,7 @@ final class ChatViewModel: ObservableObject {
            prev.role == msg.role,
            let prevDate = Self.parseChatDate(prev.ts, formatter: formatter),
            let curDate = Self.parseChatDate(msg.ts, formatter: formatter),
-           curDate.timeIntervalSince(prevDate) <= 120,
+           curDate.timeIntervalSince(prevDate) <= ChatMetrics.groupGapSeconds,
            let lastIdx = displayedRowsCache.indices.last,
            case .message(let lastMsg, _) = displayedRowsCache[lastIdx],
            lastMsg.id == prev.id {
@@ -997,7 +997,7 @@ final class ChatViewModel: ObservableObject {
                 out[msg.id] = true
                 continue
             }
-            out[msg.id] = nxt.timeIntervalSince(cur) > 120
+            out[msg.id] = nxt.timeIntervalSince(cur) > ChatMetrics.groupGapSeconds
         }
         return out
     }
@@ -1058,7 +1058,12 @@ final class ChatViewModel: ObservableObject {
     }
 
     func setPollingActive(_ active: Bool) {
+        let wasActive = appIsActive
         appIsActive = active
+        // 回前台：后台期间长轮询可能被系统掐断，重拉一次最近 50 条对齐（build 243 起 history 只在这几处拉）
+        if active && !wasActive {
+            Task { await refreshRecent() }
+        }
     }
 
     private func pollDelaySeconds() -> Int {
@@ -1067,6 +1072,11 @@ final class ChatViewModel: ObservableObject {
         return min(16, 1 << min(pollingFailureCount, 4))
     }
 
+    // 珩 2026-09-12 build 243：只拉增量。
+    //   之前每次 poll 有新记录就再 GET /chat/history?limit=50 整页重拉重画；而且 since 里的 "+08:00" 没转义，
+    //   服务端 parse_qs 把 "+" 当空格 → 最后一条永远算"新"，长轮询根本不挂，变成每 2 秒 poll+history+thinking 三连。
+    //   现在：since 走 %2B（URLComponents.ccPlusSafeURL），poll 长轮询挂 20s；新记录直接 append 进 messages；
+    //   history 只在 app 回前台（setPollingActive）、poll 连续失败 3 次、下拉刷新（loadEarlier）时拉。
     private func pollOnce() async {
         sweepStaleThinkingPlaceholders()   // H3 兜底: 每 tick 清扫僵尸占位, 不依赖 scenePhase 变化
         do {
@@ -1082,21 +1092,27 @@ final class ChatViewModel: ObservableObject {
             }
             if !response.chat.newRecords.isEmpty {
                 let existingIds = Set(messages.map(\.id))
-                chatStore.upsert(response.chat.newRecords)
                 mergeUnique(response.chat.newRecords)
                 notifyPollingAssistantMessages(response.chat.newRecords, existingIds: existingIds)
                 reconcileLocalSendState()
-                await refreshRecent()
                 fetchThinkingForNewTurns(response.chat.newRecords)
                 lastError = nil
-            } else if let last = response.chat.lastTs, (lastTs ?? "") < last {
-                lastTs = last
-                reconcileLocalSendState()
             }
+            // 服务端 last_ts = 本次返回里最大的 ts（没新记录时 = since），只前进不后退
+            if let last = response.chat.lastTs { advanceLastTs(last) }
+            if response.chat.newRecords.isEmpty { reconcileLocalSendState() }
         } catch {
             pollingFailureCount += 1
             objectWillChange.send()
+            // 连续失败 3 次：可能是长轮询链路断了/换网了，重拉一次最近 50 条对齐
+            if pollingFailureCount == 3 { await refreshRecent() }
         }
+    }
+
+    /// lastTs 只前进不后退（history/cache 回填不能把它拉回去，否则 poll 会把已知消息再吐一遍）
+    private func advanceLastTs(_ ts: String?) {
+        guard let ts, !ts.isEmpty else { return }
+        if (lastTs ?? "") < ts { lastTs = ts }
     }
 
     // Phase 3 (thinking-stream-render): 新到的 assistant 记录带 turn_id 的, 异步拉 thinking.
@@ -1163,11 +1179,27 @@ final class ChatViewModel: ObservableObject {
         if !force && !noThinkingPipeline && isFreshThinkingTurn(tid) && passesBatchHeadGate(tid) {
             thinkingPlaceholderSince[tid] = Date()
         }
+        // build 243：/v1/thinking 只在这个 turn 还"在进行"时才反复拉（对方在打字 / 气泡落地 ≤ 120s）；
+        // 历史回填、切回前台时的老 turn 只拉一次，拉不到就算了（silent push 到了还会 force 补拉）。
+        let keepPolling = force || isCcTyping || isFreshThinkingTurn(tid)
         Task { [weak self] in
             // 退避累计 ~89s: 0,1,3,6,11,19,29,44,64,89s — 在 thinking 晚到 ~30s 前后多次 catch, 不靠 flaky push.
-            let delays: [UInt64] = [0, 1, 2, 3, 5, 8, 10, 15, 20, 25].map { UInt64($0) * 1_000_000_000 }
+            let delays: [UInt64] = keepPolling
+                ? [0, 1, 2, 3, 5, 8, 10, 15, 20, 25].map { UInt64($0) * 1_000_000_000 }
+                : [0]
             for (i, delay) in delays.enumerated() {
-                if delay > 0 { try? await Task.sleep(nanoseconds: delay) }
+                if delay > 0 {
+                    try? await Task.sleep(nanoseconds: delay)
+                    // 途中 turn 已结束且早不新鲜（既没人在打字、气泡也过了新鲜窗）→ 停
+                    let stillGoing = await MainActor.run { () -> Bool in
+                        guard let self else { return false }
+                        return force || self.isCcTyping || self.isFreshThinkingTurn(tid)
+                    }
+                    if !stillGoing {
+                        await MainActor.run { self?.thinkingTurnGaveUp(tid) }
+                        return
+                    }
+                }
                 if let text = await ChatNetworkClient.shared.fetchThinking(turnId: tid) {
                     await MainActor.run { self?.thinkingTurnLoaded(tid, text: text) }
                     return
@@ -1437,7 +1469,7 @@ final class ChatViewModel: ObservableObject {
             URLQueryItem(name: "before", value: oldest),
             URLQueryItem(name: "limit", value: "200"),
         ]
-        guard let finalURL = components?.url else { return }
+        guard let finalURL = components?.ccPlusSafeURL else { return }
         do {
             let records = try await ChatNetworkClient.shared.fetchHistory(url: finalURL)
             recordNetworkSuccess()
@@ -1479,7 +1511,7 @@ final class ChatViewModel: ObservableObject {
             latest = mergeLocalCommandMessages(into: latest)
             self.messages = latest
             reconcileLocalSendState()
-            self.lastTs = records.last?.ts
+            advanceLastTs(records.last?.ts)
             self.hasMoreEarlier = records.count >= 200
             // SwiftData 全量 upsert 异步分批 不阻塞 UI
             await self.chatStore.upsertAsync(records)
@@ -1495,7 +1527,7 @@ final class ChatViewModel: ObservableObject {
         cached.sort(by: Self.chatMessageAscending)
         cached = mergeLocalCommandMessages(into: cached)
         self.messages = cached
-        self.lastTs = cached.last?.ts
+        advanceLastTs(cached.last?.ts)
         self.hasMoreEarlier = chatStore.before(ts: cached.first?.ts ?? "", limit: 1).isEmpty == false
         // 2026-05-12 — re-merge any persisted optimistic-failed records on top of
         // the freshly-loaded server cache (kept as ephemeral, no GRDB write).
@@ -1561,15 +1593,22 @@ final class ChatViewModel: ObservableObject {
     private func mergeUnique(_ records: [ChatMessage]) {
         chatStore.upsert(records)
         let existing = Set(self.messages.map { $0.id })
-        var added = false
-        for r in records where !existing.contains(r.id) {
-            self.messages.append(r)
-            added = true
+        let fresh = records.filter { !existing.contains($0.id) }
+        guard !fresh.isEmpty else {
+            advanceLastTs(records.last?.ts)
+            return
         }
-        if added { _sortMessages() }
-        if let last = records.last, (self.lastTs ?? "") < last.ts {
-            self.lastTs = last.ts
+        // build 243：常见情况（新记录全比当前最后一条新）逐条 append —— messages.didSet 走 incremental，
+        // 列表层 insertRows；只有乱序到达才排一次（会整表重建，少见）。
+        let tail = self.messages.last?.ts ?? ""
+        let sortedFresh = fresh.sorted(by: Self.chatMessageAscending)
+        if let first = sortedFresh.first, first.ts > tail {
+            for r in sortedFresh { self.messages.append(r) }
+        } else {
+            for r in sortedFresh { self.messages.append(r) }
+            _sortMessages()
         }
+        advanceLastTs(records.last?.ts)
     }
 
     private func fetchNew() async {
@@ -1580,7 +1619,7 @@ final class ChatViewModel: ObservableObject {
             items.append(URLQueryItem(name: "since", value: last))
         }
         components?.queryItems = items
-        guard let finalURL = components?.url else { return }
+        guard let finalURL = components?.ccPlusSafeURL else { return }
         do {
             let (data, _) = try await session.data(for: CcServerConfig.authenticatedRequest(url: finalURL))
             let decoded = try JSONDecoder().decode(ChatHistoryResponse.self, from: data)
@@ -1639,7 +1678,7 @@ final class ChatViewModel: ObservableObject {
             items.append(URLQueryItem(name: "quoted_ts", value: q))
         }
         components?.queryItems = items
-        guard let url = components?.url else { return }
+        guard let url = components?.ccPlusSafeURL else { return }
         var req = URLRequest(url: url)
         req.httpMethod = "POST"
         req.setValue("application/octet-stream", forHTTPHeaderField: "Content-Type")
@@ -1735,7 +1774,7 @@ final class ChatViewModel: ObservableObject {
             URLQueryItem(name: "q", value: q),
             URLQueryItem(name: "limit", value: "5000"),
         ]
-        guard let finalURL = components?.url else { return }
+        guard let finalURL = components?.ccPlusSafeURL else { return }
         do {
             let (data, _) = try await session.data(for: CcServerConfig.authenticatedRequest(url: finalURL))
             let decoded = try JSONDecoder().decode(ChatHistoryResponse.self, from: data)
@@ -1771,7 +1810,7 @@ final class ChatViewModel: ObservableObject {
                 URLQueryItem(name: "before", value: oldest),
                 URLQueryItem(name: "limit", value: "1000"),
             ]
-            guard let finalURL = components?.url else { break }
+            guard let finalURL = components?.ccPlusSafeURL else { break }
             do {
                 let (data, _) = try await session.data(for: CcServerConfig.authenticatedRequest(url: finalURL))
                 let resp = try JSONDecoder().decode(ChatHistoryResponse.self, from: data)
@@ -1821,7 +1860,7 @@ final class ChatViewModel: ObservableObject {
             URLQueryItem(name: "date", value: day),
             URLQueryItem(name: "limit", value: "1"),
         ]
-        if let finalURL = components?.url,
+        if let finalURL = components?.ccPlusSafeURL,
            let (data, _) = try? await session.data(for: CcServerConfig.authenticatedRequest(url: finalURL)),
            let decoded = try? JSONDecoder().decode(ChatHistoryResponse.self, from: data),
            let first = decoded.records.first {
@@ -1855,7 +1894,7 @@ final class ChatViewModel: ObservableObject {
                 URLQueryItem(name: "around_ts", value: ts),
                 URLQueryItem(name: "n", value: "50"),
             ]
-            if let finalURL = components?.url {
+            if let finalURL = components?.ccPlusSafeURL {
                 do {
                     let (data, _) = try await session.data(for: CcServerConfig.authenticatedRequest(url: finalURL))
                     let decoded = try JSONDecoder().decode(ChatHistoryResponse.self, from: data)
@@ -4037,40 +4076,12 @@ private struct ChatListView: View {
     // Phase F (item 2) — chat 背景图存在时, ChatListView 自身 background 走 clear, 让外层 ZStack 的图透出来
     @AppStorage("chat_background_path") private var chatBackgroundPath: String = ""
 
-    private func bottomScrollTargetId() -> String? {
-        vm.displayedRowsCache.last?.id ?? vm.displayedMessages.last?.id
-    }
+    // 珩 2026-09-12 build 243：列表层换成 UITableView（ChatTableView.swift），滚动命令用 token 发过去
+    @State private var bottomToken: Int = 0
+    @State private var bottomAnimatedToken: Int = 0
+    /// 加载更早期间为真：列表不自动贴底
+    @State private var holdingPosition: Bool = false
 
-    private func scrollToBottom(proxy: ScrollViewProxy, delay: TimeInterval = 0, animated: Bool = false) {
-        let action = {
-            guard let target = bottomScrollTargetId() else { return }
-            if animated {
-                withAnimation(.easeOut(duration: 0.25)) {
-                    proxy.scrollTo(target, anchor: .bottom)
-                }
-            } else {
-                var tx = Transaction()
-                tx.disablesAnimations = true
-                withTransaction(tx) {
-                    proxy.scrollTo(target, anchor: .bottom)
-                }
-            }
-        }
-        if delay > 0 {
-            DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: action)
-        } else {
-            DispatchQueue.main.async(execute: action)
-        }
-    }
-
-    private func scrollBottom(proxy: ScrollViewProxy) {
-        // Build 183: scroll to the last stable row id after List layout settles.
-        // The old bottom sentinel moved index on every append and could race
-        // SwiftUI's UICollectionView batch commit.
-        scrollToBottom(proxy: proxy, delay: 0.05)
-        scrollToBottom(proxy: proxy, delay: 0.2)
-        scrollToBottom(proxy: proxy, delay: 0.6)
-    }
     // Bug 3 fix: block scroll/haptic while user is in QuickLook preview
     @State private var previewActive: Bool = false
     @State private var lastSoundedMessageId: String? = nil
@@ -4103,292 +4114,149 @@ private struct ChatListView: View {
     }
 
     var body: some View {
-        ScrollViewReader { proxy in
-            ZStack(alignment: .bottomTrailing) {
-                ScrollView {
-                    LazyVStack(alignment: .leading, spacing: 0) {
-                        if vm.searchState != .idle {
-                            SearchStateContent(vm: vm, proxy: proxy, onImageTap: onImageTap)
-                        } else {
-                            // Phase E amend (2026-05-11) — "加载更早 200 条" 按钮砍, 改顶部 pull-to-refresh.
-                            // refreshable 挂在 ScrollView, 这里只留个轻提示当还有可拉时.
-                            if vm.hasMoreEarlier && vm.loadingEarlier {
-                                HStack(spacing: 6) {
-                                    ProgressView().controlSize(.small)
-                                    Text("加载更早...")
-                                        .font(.ccSerifAdaptive(size: 12))
-                                }
-                                .frame(maxWidth: .infinity)
-                                .padding(.vertical, 6)
-                                .foregroundStyle(Color.ccTextDim)
-                            }
-                            ForEach(vm.displayedRowsCache) { row in
-                                chatRowView(row)
-                                    .frame(maxWidth: .infinity, alignment: .leading)
-                            }
-                        }
-                        if let err = vm.lastError {
-                            ChatErrorRow(error: err)
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                        }
-                    }
-                }
-                // Phase F (item 2) — bg image 存在时走 clear 透出 image, 否则走 ccBg
-                .background(chatBackgroundPath.isEmpty ? Color.ccBg : Color.clear)
-                // Phase E amend (2026-05-11) — 顶部下拉触发 loadEarlier (取代旧"加载更早 200 条"按钮)
-                // Phase F (item 8) — load 期间锁 isUserScrolledUp=true, 防 prepend 来的旧消息触发 onChange
-                // 跳到底. load 完留 token 短暂保持 (200ms) 兜底 onChange race.
-                .refreshable {
-                    if vm.hasMoreEarlier {
-                        let anchor = vm.displayedRowsCache.first?.id
-                        isUserScrolledUp = true
-                        suppressBottomScrollUntil = Date().addingTimeInterval(2.0)
-                        await vm.loadEarlier()
-                        if let anchor {
-                            DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
-                                proxy.scrollTo(anchor, anchor: .top)
-                            }
-                        }
-                        // 再延 200ms 兜底 onChange race
-                        suppressBottomScrollUntil = Date().addingTimeInterval(0.2)
-                    }
-                }
-                .scrollDismissesKeyboard(.interactively)  // 珩 2026-09-06 施工单⑪：跟手收键盘
-                .simultaneousGesture(
-                    TapGesture().onEnded {
-                        #if os(iOS)
-                        UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
-                        #endif
-                    }
-                )
-                // 2026-05-14 build 189 — 给 ScrollView 一段持久 bottom inset 防 TypingStatusBar / 输入栏
-                // 加进 view tree 时挤压 chat 最后一行 视觉上"输入栏没到底""遮一部分 chat"的根
-                .safeAreaInset(edge: .bottom, spacing: 0) {
-                    Color.clear.frame(height: 8)
-                }
-                .onScrollGeometryChange(for: Bool.self) { geo in
-                    // 距离底部 > 350pt 视为 scrolled up (350 比 200 留足 keyboard 弹起 viewport 收缩的余量)
-                    let distanceFromBottom = geo.contentSize.height - (geo.contentOffset.y + geo.containerSize.height)
-                    return distanceFromBottom > 350
-                } action: { _, scrolledUp in
-                    // keyboard 弹起期间不更新 isUserScrolledUp (viewport 收缩会让 distanceFromBottom 自动变大 误判)
-                    guard !inputFocused else { return }
-                    // 2026-05-14 build 189 — isCcTyping 切换时 TypingStatusBar 出现/消失会瞬间改变
-                    // contentSize/containerSize, 触发本回调而非用户真滑. 在 typing 状态下跳过更新, 等 typing
-                    // 结束后状态会通过下一次真正滑动 reset.
-                    guard !vm.isCcTyping else { return }
-                    isUserScrolledUp = scrolledUp
-                    if !scrolledUp {
-                        // 用户回到底部 自动清 unread
-                        unreadCount = 0
-                        vm.resetVisibleWindowToRecent()
-                    }
-                }
-                .onChange(of: inputFocused) { _, focused in
-                    if focused {
-                        // keyboard 弹起 用户在打字 强制按"在底部"处理 不要让 keyboard 弹起触发 scroll geometry 误判
-                        isUserScrolledUp = false
-                        unreadCount = 0
-                    }
-                    // 2026-05-14 build 189 — 老代码有两条 scrollToBottom (inline asyncAfter 加 handleInputFocusChange)
-                    // 双 scroll 在 keyboard 动画期间撞 race 视觉上 chat 列表抖. 只留 handleInputFocusChange 那一条.
-                    handleInputFocusChange(focused: focused, proxy: proxy)
-                }
-                .onChange(of: vm.messages.count) { oldCount, count in
-                    triggerSoundAndHaptic(oldCount: oldCount, count: count)
-                    let delta = max(0, count - oldCount)
-                    // 自己刚发 vs 别人发 分开处理 (role=user 不算 unread role=task pill 也不算)
-                    // Phase E amend (2026-05-11) — cccompanion 未读 bubble 漏 修: 之前 suffix(delta) 在
-                    // backfill 把消息插中段时 trailing 不一定是新消息. 改用 lastTs/firstTs 不变也兜底, 同时
-                    // 即便 newOthersCount=0 但 delta>0 视作有变化 (assistant typing pill 不带 ts 也算).
-                    let newOthersCount: Int
-                    let hasUserMessage: Bool
-                    if delta > 0 && oldCount < count {
-                        let recentMessages = Array(vm.messages.suffix(delta))
-                        let filtered = recentMessages.filter { $0.role != "user" && $0.role != "task" }.count
-                        newOthersCount = filtered > 0 ? filtered : delta  // 兜底: delta>0 时至少计 delta
-                        hasUserMessage = recentMessages.contains(where: { $0.role == "user" })
-                    } else {
-                        newOthersCount = 0
-                        hasUserMessage = false
-                    }
-                    // Phase F (item 8) — loadEarlier 窗口期内 prepend 来的旧消息不能触发 scroll-bottom
-                    let suppressActive = Date() < suppressBottomScrollUntil
-                    // 自己刚发了消息 → 强制 scroll bottom + 清 unread (绕过 isUserScrolledUp 误判)
-                    if hasUserMessage && !suppressActive {
-                        unreadCount = 0
-                        isUserScrolledUp = false
-                        vm.resetVisibleWindowToRecent()
-                        // Build 184 crash fix: LazyVStack has no UICollectionView batch update.
-                        scrollToBottom(proxy: proxy, delay: 0.05)
-                        return
-                    }
-                    // 2026-06-11 jump-fix(公开版对位): jump 期间(jumpScrollTarget != nil)不 auto scroll-bottom。
-                    // 公开版无私版的 jumpInProgressUntil/suppressingProgrammaticJump, 用 jumpScrollTarget 等价守卫
-                    // (跟下方 displayedRowsCache.count onChange 的 jumpScrollTarget==nil 守卫同一惯用法), 否则
-                    // 跳老消息时 merge 撑大 messages.count → 本 onChange else 分支 scrollToBottom+resetVisibleWindow
-                    // 会把刚扩的窗收回 300 并弹回底, 三刀全白做。jumpScrollTarget==nil(99% 时)守卫是 no-op 零回归。
-                    if (isUserScrolledUp || suppressActive || vm.jumpScrollTarget != nil) && newOthersCount > 0 {
-                        // 用户在上面看历史 / loadEarlier / jump 期间 不 auto scroll 累计 unread (只算别人发的)
-                        if !suppressActive && vm.jumpScrollTarget == nil { unreadCount += newOthersCount }
-                    } else if vm.jumpScrollTarget == nil {
-                        unreadCount = 0
-                        vm.resetVisibleWindowToRecent()
-                        // 不带动画 直接 scroll 不再跟 cache append 撞 视觉上稳
-                        scrollToBottom(proxy: proxy, delay: 0.05)
-                    }
-                }
-                .onAppear {
-                    scrollBottom(proxy: proxy)
-                    hasScrolledInitially = true
-                }
-                .onChange(of: scrollToken) { _, _ in
-                    scrollBottom(proxy: proxy)
-                    unreadCount = 0
-                    isUserScrolledUp = false
-                    vm.resetVisibleWindowToRecent()
-                }
-                .onChange(of: vm.returnToBottomBump) { _, _ in
-                    // 2026-05-08 patch1: 搜索取消触发回最底
-                    scrollBottom(proxy: proxy)
-                    unreadCount = 0
-                    isUserScrolledUp = false
-                    vm.resetVisibleWindowToRecent()
-                }
-                .onChange(of: vm.jumpScrollTarget) { _, target in
-                    guard let target else { return }
-                    // 2026-06-11 jump-fix(3/3): 单次 scrollTo 改三连校准。LazyVStack 未渲染行
-                    // 的高度是估算值, 一次 scrollTo 落点必偏(文本/图片/工具行混排时尤甚),
-                    // 这就是"跳了但停在错的位置"的根。首滚把目标附近真实渲染出来, 二三滚
-                    // 基于真实行高落准——LazyVStack scrollTo 偏移的标准 workaround。
-                    // guard 比对 target: 期间用户又点了别的跳转就让位给新目标的三连滚。
-                    for (i, delay) in [0.15, 0.55, 1.1].enumerated() {
-                        DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
-                            guard vm.jumpScrollTarget == target else { return }
-                            withAnimation(i == 0 ? .easeOut(duration: 0.3) : nil) {
-                                proxy.scrollTo(target, anchor: .center)
-                            }
-                            if i == 2 { vm.jumpScrollTarget = nil }
-                        }
-                    }
-                }
-                .onChange(of: vm.displayedRowsCache.count) { oldCount, newCount in
-                    // build 93: rows 真正进 cache 时再 scroll 一次 过 hydrate race
-                    // 2026-05-07 jumpScrollTarget 不空时不 scroll bottom 会覆盖跳老消息
-                    if !isUserScrolledUp && newCount > oldCount && vm.jumpScrollTarget == nil {
-                        scrollToBottom(proxy: proxy, delay: 0.05)
-                    }
-                }
-                // unread indicator overlay — 微信式
-                if unreadCount > 0 {
-                    Button {
-                        scrollToBottom(proxy: proxy, animated: true)
-                        unreadCount = 0
-                        isUserScrolledUp = false
-                        vm.resetVisibleWindowToRecent()
-                    } label: {
-                        HStack(spacing: 4) {
-                            Image(systemName: "chevron.down")
-                                .font(.ccSerifAdaptive(size: 11, weight: .bold))
-                            Text("\(unreadCount) 条新消息")
-                                .font(.ccSerifAdaptive(size: 12, weight: .medium))
-                        }
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 8)
-                        .background(Color.ccCard)
-                        .foregroundStyle(Color.ccAccent)
-                        .clipShape(Capsule())
-                        .shadow(color: .black.opacity(0.12), radius: 4, x: 0, y: 1)
-                    }
-                    .buttonStyle(.plain)
-                    .padding(.trailing, 16)
-                    .padding(.bottom, 80)
-                    .transition(.scale.combined(with: .opacity))
-                }
-            } // ZStack
-        }
-    }
-
-    @ViewBuilder
-    private func chatRowView(_ row: ChatRowItem) -> some View {
-        switch row {
-        case .separator(let label, _):
-            ChatSeparatorRow(label: label)
-        case .toolStack(let stack):
-            ToolActivityStackView(stack: stack)
-                .id("stack_\(stack.id)")
-                .transition(.asymmetric(
-                    insertion: .scale(scale: 0.94, anchor: .bottom).combined(with: .opacity),
-                    removal: .opacity
-                ))
-        case .message(let msg, let showTime):
-            VStack(alignment: .leading, spacing: 2) {
-                // Phase 2/3 (thinking-stream-render) + 2026-06-11 占位动画: 该 turn 第一条 assistant 消息上方,
-                // thinking 已拉到 → 折叠卡片; 还在路上 → 「正在思考」占位 (原地, 拉到内容卡片替占位不跳).
-                if vm.isThinkingChipAnchor(msg), let tid = msg.turnId {
-                    if let think = vm.thinkingByTurn[tid] {
-                        ThinkingChip(text: think)
-                    } else if vm.showsThinkingPlaceholder(tid) {
-                        ThinkingPlaceholder()
-                            .transition(.opacity)
-                    }
-                }
-                ChatMessageListRow(
-                message: msg,
-                showTime: showTime,
-                multiSelectMode: vm.multiSelectMode,
-                selected: vm.selectedTs.contains(msg.ts),
-                onToggleSelection: { vm.toggleSelection(msg) },
-                onEnterMultiSelect: { vm.enterMultiSelect(with: msg) },
-                onReact: { emoji in Task { await vm.react(msg, emoji: emoji) } },
-                onQuote: { vm.quoting = msg },
-                onCopyText: vm.assistantTurnEndsTs.contains(msg.ts)
-                    ? { UIPasteboard.general.string = vm.turnTexts(endingAt: msg.ts).joined(separator: "\n\n"); CcToastBus.shared.show("已复制") }
-                    : nil,
-                onFavorite: { Task { await vm.addToFavorites(msg) } },
-                onAddTodo: { Task { await vm.addTodo(msg.text) } },
-                onDelete: { Task { await vm.delete(msg) } },
-                onRegenerate: msg.ts == vm.lastAssistantTurnLastTs
-                    ? { Task { await vm.regenerate(messageTs: vm.lastAssistantTurnFirstTs ?? msg.ts, extraReplaceIds: vm.lastAssistantTurnExtraTs) } }
-                    : nil,
-                onFavoriteTurn: vm.assistantTurnEndsTs.contains(msg.ts)
-                    ? {
-                        if FavoritedTurnsCache.shared.contains(msg.ts) {
-                            // Already favorited → toggle off
-                            FavoritedTurnsCache.shared.remove(msg.ts)
-                            Task { await vm.unfavoriteTurn(endingAt: msg.ts); CcToastBus.shared.show("已取消收藏") }
-                        } else {
-                            FavoritedTurnsCache.shared.insert(msg.ts)
-                            Task { await vm.addManyToFavorites(vm.turnMessages(endingAt: msg.ts)); CcToastBus.shared.show("已收藏") }
-                        }
-                    }
-                    : nil,
-                onChoiceSelect: { value in Task { await vm.send(text: value) } },
-                onPreviewActiveChanged: { active in previewActive = active },
-                onEnterRP: onEnterRP.map { cb in { cb(msg.text) } },
-                onImageTap: onImageTap,
-                sendStatus: vm.sendStatus(forId: msg.id),
-                onRetry: msg.isUser ? { vm.retryFailedSend(id: msg.id) } : nil,
-                onDiscardFailed: msg.isUser ? { vm.discardFailedSend(id: msg.id) } : nil
-                )
+        ZStack(alignment: .bottomTrailing) {
+            if vm.searchState != .idle {
+                searchList
+            } else {
+                messageTable
             }
-            .id(msg.id)
-            .padding(.vertical, 4)
-            .padding(.trailing, 12)
-            .transition(.asymmetric(
-                insertion: .opacity.combined(with: .move(edge: .bottom)),
-                removal: .opacity
-            ))
+            // unread indicator overlay — 微信式
+            if unreadCount > 0 && vm.searchState == .idle {
+                Button {
+                    bottomAnimatedToken &+= 1
+                    unreadCount = 0
+                    isUserScrolledUp = false
+                    vm.resetVisibleWindowToRecent()
+                } label: {
+                    HStack(spacing: 4) {
+                        Image(systemName: "chevron.down")
+                            .font(.ccSerifAdaptive(size: 11, weight: .bold))
+                        Text("\(unreadCount) 条新消息")
+                            .font(.ccSerifAdaptive(size: 12, weight: .medium))
+                    }
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 8)
+                    .background(Color.ccCard)
+                    .foregroundStyle(Color.ccAccent)
+                    .clipShape(Capsule())
+                    .shadow(color: .black.opacity(0.12), radius: 4, x: 0, y: 1)
+                }
+                .buttonStyle(.plain)
+                .padding(.trailing, 16)
+                .padding(.bottom, 80)
+                .transition(.scale.combined(with: .opacity))
+            }
         }
     }
 
-    private func handleInputFocusChange(focused: Bool, proxy: ScrollViewProxy) {
-        if focused {
-            // 珩 2026-09-06 施工单⑪：等键盘动画（~0.25s）走完再落底，不跟键盘动画抢同一帧
-            scrollToBottom(proxy: proxy, delay: 0.28, animated: false)
-        } else if !isUserScrolledUp {
-            // 珩 2026-09-06（她 20:38 说的）：收键盘后气泡不掉下来——键盘收完再把列表贴回底
-            scrollToBottom(proxy: proxy, delay: 0.3, animated: true)
+    /// 正常聊天态：UIKit 列表（ChatTableView.swift）。行内容仍是原来的 SwiftUI 气泡。
+    private var messageTable: some View {
+        VStack(spacing: 0) {
+            ChatMessageTable(
+                rows: vm.displayedRowsCache,
+                commands: ChatTableCommands(
+                    scrollToBottomToken: bottomToken,
+                    scrollToBottomAnimatedToken: bottomAnimatedToken,
+                    jumpTargetId: vm.jumpScrollTarget,
+                    holdPosition: holdingPosition || vm.jumpScrollTarget != nil
+                ),
+                content: { row, prev, width in
+                    AnyView(
+                        ChatRowHost(
+                            vm: vm, row: row, prev: prev, width: width,
+                            onEnterRP: onEnterRP,
+                            onImageTap: onImageTap,
+                            onPreviewActiveChanged: { active in previewActive = active }
+                        )
+                    )
+                },
+                onScrolledUpChanged: { up in
+                    // keyboard 弹起期间不更新 (viewport 收缩会让 distanceFromBottom 自动变大 误判)
+                    guard !inputFocused else { return }
+                    isUserScrolledUp = up
+                    if !up {
+                        unreadCount = 0
+                        vm.resetVisibleWindowToRecent()
+                    }
+                },
+                onPullToRefresh: {
+                    // Phase E amend (2026-05-11) — 顶部下拉触发 loadEarlier；期间锁住不自动贴底
+                    guard vm.hasMoreEarlier else { return }
+                    holdingPosition = true
+                    isUserScrolledUp = true
+                    await vm.loadEarlier()
+                    try? await Task.sleep(nanoseconds: 250_000_000)
+                    holdingPosition = false
+                },
+                onFirstLayout: { hasScrolledInitially = true },
+                onJumpFinished: { vm.jumpScrollTarget = nil },
+                onBackgroundTap: {
+                    #if os(iOS)
+                    UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
+                    #endif
+                }
+            )
+            if let err = vm.lastError {
+                ChatErrorRow(error: err)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+        }
+        // Phase F (item 2) — bg image 存在时走 clear 透出 image, 否则走 ccBg
+        .background(chatBackgroundPath.isEmpty ? Color.ccBg : Color.clear)
+        .onChange(of: inputFocused) { _, focused in
+            if focused {
+                // keyboard 弹起 用户在打字 强制按"在底部"处理
+                isUserScrolledUp = false
+                unreadCount = 0
+            }
+        }
+        .onChange(of: vm.messages.count) { oldCount, count in
+            triggerSoundAndHaptic(oldCount: oldCount, count: count)
+            // 跟不跟随由列表自己按"是否贴底"决定；这里只算未读胶囊的数字
+            let delta = max(0, count - oldCount)
+            guard delta > 0 else { return }
+            let recent = Array(vm.messages.suffix(delta))
+            let hasUserMessage = recent.contains(where: { $0.role == "user" })
+            if hasUserMessage {
+                unreadCount = 0
+                isUserScrolledUp = false
+                vm.resetVisibleWindowToRecent()
+                return
+            }
+            let others = recent.filter { $0.role != "user" && $0.role != "task" }.count
+            if isUserScrolledUp && !holdingPosition && vm.jumpScrollTarget == nil && others > 0 {
+                unreadCount += others
+            }
+        }
+        .onChange(of: scrollToken) { _, _ in
+            bottomToken &+= 1
+            unreadCount = 0
+            isUserScrolledUp = false
+            vm.resetVisibleWindowToRecent()
+        }
+        .onChange(of: vm.returnToBottomBump) { _, _ in
+            // 2026-05-08 patch1: 搜索取消触发回最底
+            bottomToken &+= 1
+            unreadCount = 0
+            isUserScrolledUp = false
+            vm.resetVisibleWindowToRecent()
+        }
+    }
+
+    /// 搜索态：还是 SwiftUI 列表（SearchStateContent 要 ScrollViewProxy）
+    private var searchList: some View {
+        ScrollViewReader { proxy in
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 0) {
+                    SearchStateContent(vm: vm, proxy: proxy, onImageTap: onImageTap)
+                    if let err = vm.lastError {
+                        ChatErrorRow(error: err)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                }
+            }
+            .background(chatBackgroundPath.isEmpty ? Color.ccBg : Color.clear)
+            .scrollDismissesKeyboard(.interactively)
         }
     }
 
@@ -4425,6 +4293,90 @@ private struct ChatListView: View {
                     AudioServicesPlaySystemSound(1003)
                 }
             }
+        }
+    }
+}
+
+/// 一行的 SwiftUI 内容，装在 UITableViewCell 的 UIHostingConfiguration 里（珩 2026-09-12 build 243）。
+/// 观察 vm 是为了 thinking 卡片 / 多选态 / 发送状态变了时行内自己刷新，不用重建 cell。
+private struct ChatRowHost: View {
+    @ObservedObject var vm: ChatViewModel
+    let row: ChatRowItem
+    let prev: ChatRowItem?
+    let width: CGFloat
+    var onEnterRP: ((String) -> Void)? = nil
+    var onImageTap: ((URL) -> Void)? = nil
+    var onPreviewActiveChanged: ((Bool) -> Void)? = nil
+
+    /// 上一行是同一方、5 分钟内的消息 → 这一行是"连发"，行距用小的
+    private var groupedWithPrevious: Bool {
+        guard case .message(let msg, _) = row, let prev, case .message(let p, _) = prev else { return false }
+        return ChatMetrics.isGrouped(prev: p, cur: msg)
+    }
+
+    var body: some View {
+        switch row {
+        case .separator(let label, _):
+            ChatSeparatorRow(label: label)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        case .toolStack(let stack):
+            ToolActivityStackView(stack: stack)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        case .message(let msg, let showTime):
+            VStack(alignment: .leading, spacing: 2) {
+                // Phase 2/3 (thinking-stream-render) + 2026-06-11 占位动画: 该 turn 第一条 assistant 消息上方,
+                // thinking 已拉到 → 折叠卡片; 还在路上 → 「正在思考」占位 (原地, 拉到内容卡片替占位不跳).
+                if vm.isThinkingChipAnchor(msg), let tid = msg.turnId {
+                    if let think = vm.thinkingByTurn[tid] {
+                        ThinkingChip(text: think)
+                    } else if vm.showsThinkingPlaceholder(tid) {
+                        ThinkingPlaceholder()
+                            .transition(.opacity)
+                    }
+                }
+                ChatMessageListRow(
+                    message: msg,
+                    showTime: showTime,
+                    multiSelectMode: vm.multiSelectMode,
+                    selected: vm.selectedTs.contains(msg.ts),
+                    onToggleSelection: { vm.toggleSelection(msg) },
+                    onEnterMultiSelect: { vm.enterMultiSelect(with: msg) },
+                    onReact: { emoji in Task { await vm.react(msg, emoji: emoji) } },
+                    onQuote: { vm.quoting = msg },
+                    onCopyText: vm.assistantTurnEndsTs.contains(msg.ts)
+                        ? { UIPasteboard.general.string = vm.turnTexts(endingAt: msg.ts).joined(separator: "\n\n"); CcToastBus.shared.show("已复制") }
+                        : nil,
+                    onFavorite: { Task { await vm.addToFavorites(msg) } },
+                    onAddTodo: { Task { await vm.addTodo(msg.text) } },
+                    onDelete: { Task { await vm.delete(msg) } },
+                    onRegenerate: msg.ts == vm.lastAssistantTurnLastTs
+                        ? { Task { await vm.regenerate(messageTs: vm.lastAssistantTurnFirstTs ?? msg.ts, extraReplaceIds: vm.lastAssistantTurnExtraTs) } }
+                        : nil,
+                    onFavoriteTurn: vm.assistantTurnEndsTs.contains(msg.ts)
+                        ? {
+                            if FavoritedTurnsCache.shared.contains(msg.ts) {
+                                // Already favorited → toggle off
+                                FavoritedTurnsCache.shared.remove(msg.ts)
+                                Task { await vm.unfavoriteTurn(endingAt: msg.ts); CcToastBus.shared.show("已取消收藏") }
+                            } else {
+                                FavoritedTurnsCache.shared.insert(msg.ts)
+                                Task { await vm.addManyToFavorites(vm.turnMessages(endingAt: msg.ts)); CcToastBus.shared.show("已收藏") }
+                            }
+                        }
+                        : nil,
+                    onChoiceSelect: { value in Task { await vm.send(text: value) } },
+                    onPreviewActiveChanged: onPreviewActiveChanged,
+                    onEnterRP: onEnterRP.map { cb in { cb(msg.text) } },
+                    onImageTap: onImageTap,
+                    sendStatus: vm.sendStatus(forId: msg.id),
+                    onRetry: msg.isUser ? { vm.retryFailedSend(id: msg.id) } : nil,
+                    onDiscardFailed: msg.isUser ? { vm.discardFailedSend(id: msg.id) } : nil,
+                    maxBubbleWidth: ChatMetrics.bubbleMaxWidth(containerWidth: width)
+                )
+            }
+            // 行距：不同段 18 / 同方 5 分钟内连发 8（ChatMetrics，量自留灯 PWA）
+            .padding(.top, groupedWithPrevious ? ChatMetrics.rowGapGrouped : ChatMetrics.rowGap)
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
     }
 }
@@ -4840,6 +4792,8 @@ private struct ChatMessageListRow: View {
     var sendStatus: SendStatus = .sent
     var onRetry: (() -> Void)? = nil
     var onDiscardFailed: (() -> Void)? = nil
+    // 珩 2026-09-12 build 243：气泡最大宽由列表宽算（ChatMetrics 63%），从 ChatRowHost 传进来
+    var maxBubbleWidth: CGFloat? = nil
 
     var body: some View {
         HStack(spacing: 8) {
@@ -4860,7 +4814,8 @@ private struct ChatMessageListRow: View {
                 onCopyText: message.isUser ? nil : onCopyText,
                 sendStatus: sendStatus,
                 onRetry: onRetry,
-                onDiscardFailed: onDiscardFailed
+                onDiscardFailed: onDiscardFailed,
+                maxBubbleWidth: maxBubbleWidth
             )
         }
         // macCatalyst — 整 row 不加 contentShape/onTapGesture 否则抢 mouse hit-test 让 bubble 内部 Text textSelection 失效
@@ -5632,6 +5587,23 @@ struct ChatBubble: View {
     var sendStatus: SendStatus = .sent
     var onRetry: (() -> Void)? = nil
     var onDiscardFailed: (() -> Void)? = nil
+    /// 气泡最大宽（含内边距）。nil 时按屏宽 × ChatMetrics.bubbleMaxWidthFraction。
+    var maxBubbleWidth: CGFloat? = nil
+    private var bubbleMaxWidth: CGFloat { maxBubbleWidth ?? ChatMetrics.bubbleMaxWidth(containerWidth: 0) }
+    /// 正文字号：ChatMetrics 基准 13.5（量自留灯 PWA）± 设置里的 小/大
+    private var bodySize: CGFloat { ChatMetrics.bodyFontSize(level: chatFontLevel) }
+    /// 段尾（showTime 为真 = 这一方这一段的最后一条）外下角收成小尖，其余三角 14
+    private var bubbleShape: UnevenRoundedRectangle {
+        let r = ChatMetrics.bubbleCornerRadius
+        let t = ChatMetrics.bubbleTailCornerRadius
+        return UnevenRoundedRectangle(
+            topLeadingRadius: r,
+            bottomLeadingRadius: (showTime && !message.isUser) ? t : r,
+            bottomTrailingRadius: (showTime && message.isUser) ? t : r,
+            topTrailingRadius: r,
+            style: .continuous
+        )
+    }
     @State private var quickLookURL: URL? = nil
     @State private var isDownloadingPreview: Bool = false
     // Phase 设置大砍 (item B) — observe favorite cache so bookmark icon flips state on tap
@@ -5659,9 +5631,9 @@ struct ChatBubble: View {
                 chatRow
             }
         }
-        // 2026-05-07 用户 push bubble 两侧对称内缩 16pt (之前 assistant 紧贴左边)
-        .padding(.horizontal, 16)
-        .padding(.vertical, 3)   // 珩 2026-09-06：气泡之间的间距
+        // 2026-05-07 用户 push bubble 两侧对称内缩 (之前 assistant 紧贴左边)；数值见 ChatMetrics.sideInset
+        // 行与行的间距改在 ChatRowHost 按"是否连发"给（build 243），这里不再加 vertical padding
+        .padding(.horizontal, ChatMetrics.sideInset)
         // Bug 3 fix: notify parent when QuickLook preview opens/closes
         .onChange(of: quickLookURL) { _, newURL in
             onPreviewActiveChanged?(newURL != nil)
@@ -5762,8 +5734,8 @@ struct ChatBubble: View {
                                 // magic 所以 inner 选词菜单覆盖了外层. 这次以外层菜单为准, 失去单词级选择能力,
                                 // 通过外层"复制本条"补全复制路径, 翻译走外层 (下面 row contextMenu 增加).
                                 Text(s)
-                                    .font(.system(size: chatBodySize))   // 珩 2026-09-06：正文换苹方（她选的）
-                                    .lineSpacing(4)   // 珩 2026-09-06：行距松一点
+                                    .font(.system(size: bodySize))   // 珩 2026-09-06：正文换苹方（她选的）；字号见 ChatMetrics
+                                    .lineSpacing(ChatMetrics.bodyLineSpacing(fontSize: bodySize))   // PWA line-height 1.56
                                     .foregroundStyle(message.isUser ? Color.ccUserText : Color.ccAssistantText)
                                     .lineLimit(nil)
                                     .fixedSize(horizontal: false, vertical: true)
@@ -5789,12 +5761,13 @@ struct ChatBubble: View {
                             }
                         }
                     }
-                    // 珩 2026-09-06（1.2.1）：气泡更胖更圆（照她发的样子）
-                    .padding(.horizontal, 16)
-                    .padding(.vertical, 11)
+                    // 珩 2026-09-12 build 243：内边距 8/13、圆角 14、段尾小尖 2、最大宽 63%——都从 ChatMetrics 来（量自留灯 PWA）
+                    .frame(maxWidth: max(80, bubbleMaxWidth - ChatMetrics.bubblePaddingHorizontal * 2), alignment: .leading)
+                    .padding(.horizontal, ChatMetrics.bubblePaddingHorizontal)
+                    .padding(.vertical, ChatMetrics.bubblePaddingVertical)
                     .background(message.isUser ? Color.ccUser : Color.ccAssistant)
                     .foregroundStyle(message.isUser ? Color.ccUserText : Color.ccAssistantText)
-                    .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
+                    .clipShape(bubbleShape)
                 }
                 if let loc = message.location {
                     Button {
@@ -5900,7 +5873,7 @@ struct ChatBubble: View {
                         }
                         if showTime {
                             Text(displayTime(message.ts))
-                                .font(.system(size: 11, design: .monospaced))
+                                .font(.system(size: ChatMetrics.timeFontSize, design: .monospaced))
                                 .foregroundStyle(message.isUser && sendStatus == .failed
                                                  ? Color(red: 0.866, green: 0.314, blue: 0.314).opacity(0.7)
                                                  : Color.ccTextDim)
@@ -5924,7 +5897,7 @@ struct ChatBubble: View {
                         }
                     }
                     .fixedSize()
-                    .padding(.top, 2)
+                    .padding(.top, ChatMetrics.timeTopGap)
                 }
             }
             if !message.isUser { Spacer(minLength: 40) }
