@@ -186,3 +186,16 @@ nonisolated public enum CcServerConfig {
         SecItemDelete(keychainQuery() as CFDictionary)
     }
 }
+
+
+extension URLComponents {
+    /// 珩 2026-09-12 build 243：URLComponents 不转义 query 里的 "+"，服务端 parse_qs 会把它当空格；
+    /// ISO 时间戳带 "+08:00" 的 since/before/ts 参数一律走这里拿 URL（"+" → "%2B"）。
+    nonisolated var ccPlusSafeURL: URL? {
+        var copy = self
+        if let q = copy.percentEncodedQuery {
+            copy.percentEncodedQuery = q.replacingOccurrences(of: "+", with: "%2B")
+        }
+        return copy.url
+    }
+}

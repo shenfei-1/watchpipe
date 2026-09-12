@@ -50,6 +50,12 @@ final class CallController: ObservableObject {
     private var lastCommitted: String = ""
     private var lastCommitAt: Date = .distantPast
     private var torndown = false
+    // 珩 2026-09-12 build 243：麦克风重开看门狗——连续失败计数，满 3 次停手并在页面提示
+    private var micRetryCount: Int = 0
+    private let maxMicRetries = 3
+    static let micFailedText = "麦克风重开失败，点静音键两下"
+    // 播放结束用 AVAudioPlayerDelegate 通知，不再靠 isPlaying 轮询
+    private var playbackWaiter: PlaybackWaiter? = nil
 
     private let session: URLSession = {
         let cfg = URLSessionConfiguration.default
@@ -70,6 +76,11 @@ final class CallController: ObservableObject {
         isActive = true
         seenIds = Set(vm.messages.map(\.id))
         speech.managesAudioSession = false
+        // SFSpeech 单次任务约 60 秒到头 / 出错自己结束 → 还在通话就立刻重开，不等看门狗那 1 秒
+        speech.onTaskEnded = { [weak self] _ in
+            guard let self, self.isActive else { return }
+            Task { await self.resumeListeningIfNeeded() }
+        }
         configureAudioSession()
         UIApplication.shared.isIdleTimerDisabled = true
 
@@ -120,9 +131,13 @@ final class CallController: ObservableObject {
         tickTask?.cancel()
         tickTask = nil
         cancellables.removeAll()
+        speech.onTaskEnded = nil
         speech.stop()
+        player?.delegate = nil
         player?.stop()
         player = nil
+        playbackWaiter?.cancel()
+        playbackWaiter = nil
         queue.removeAll()
         UIApplication.shared.isIdleTimerDisabled = false
         try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
@@ -145,6 +160,9 @@ final class CallController: ObservableObject {
             speech.stop()
             liveTranscript = ""
         } else {
+            // 静音再取消 = 手动重置看门狗的失败计数，重新试
+            micRetryCount = 0
+            if errorText == Self.micFailedText { errorText = nil }
             Task { await resumeListeningIfNeeded() }
         }
     }
@@ -166,15 +184,30 @@ final class CallController: ObservableObject {
 
     // MARK: listening
 
+    /// 看门狗 / 各处唤起：phase 在听、麦克风却没在跑 → 重开一次。
+    /// "isRecording 为真但 audioEngine 没在跑" 也算坏了（旧 engine 挂着老格式的 tap 就是这种半截状态）。
+    /// 连续失败满 maxMicRetries 次就停手，页面提示；静音键点两下重置计数再试。
     private func resumeListeningIfNeeded() async {
-        guard isActive, inForeground, !isMuted, phase != .speaking, !speech.isRecording, !restarting else { return }
+        guard isActive, inForeground, !isMuted, phase != .speaking, !restarting else { return }
+        if speech.isRecording && speech.isEngineRunning { return }
+        guard micRetryCount < maxMicRetries else { return }
         restarting = true
         defer { restarting = false }
+        if speech.isRecording { speech.stop() }
+        // 播完 mp3 / 路由变化之后 session 可能已经不是 playAndRecord+外放，先摆回来再建 engine
+        configureAudioSession()
         await speech.start()
-        if let e = speech.lastError, !e.isEmpty {
-            errorText = e
-        } else if speech.isRecording {
-            errorText = nil
+        guard isActive else { return }
+        if speech.isRecording && speech.isEngineRunning {
+            micRetryCount = 0
+            if errorText == Self.micFailedText || (speech.lastError ?? "").isEmpty { errorText = nil }
+        } else {
+            micRetryCount += 1
+            if micRetryCount >= maxMicRetries {
+                errorText = Self.micFailedText
+            } else if let e = speech.lastError, !e.isEmpty {
+                errorText = e
+            }
         }
     }
 
@@ -261,7 +294,7 @@ final class CallController: ObservableObject {
         let base = CcServerConfig.serverURL.appendingPathComponent("call/audio")
         var comps = URLComponents(url: base, resolvingAgainstBaseURL: false)
         comps?.queryItems = [URLQueryItem(name: "ts", value: ts)]
-        guard let url = comps?.url else { return nil }
+        guard let url = comps?.ccPlusSafeURL else { return nil }
         let deadline = Date().addingTimeInterval(45)
         var notPendingStreak = 0
         while isActive, Date() < deadline {
@@ -295,21 +328,68 @@ final class CallController: ObservableObject {
             return
         }
         do {
+            // 播放前：麦克风先停干净，session 设 playAndRecord + 外放
             configureAudioSession()
             let p = try AVAudioPlayer(data: data)
             p.volume = 1.0
+            let waiter = PlaybackWaiter()
+            p.delegate = waiter
+            playbackWaiter = waiter
             p.prepareToPlay()
             player = p
-            p.play()
-            // 不用 delegate：每 100ms 看一眼放完没有
-            while isActive, let cur = player, cur === p, cur.isPlaying {
-                try? await Task.sleep(nanoseconds: 100_000_000)
+            let duration = p.duration
+            if p.play() {
+                // 等 AVAudioPlayerDelegate 的 didFinishPlaying；兜底：时长 + 3 秒没回调也放行
+                await waiter.wait(timeout: max(1.0, duration + 3.0))
             }
+            p.delegate = nil
         } catch {
             errorText = "播放失败: \(error.localizedDescription)"
         }
+        playbackWaiter = nil
         if player != nil { player = nil }
-        if isActive, queue.isEmpty { phase = .listening }
+        guard isActive else { return }
+        // 播完：重新激活 session、重建 engine/tap/request/task 再开听
+        configureAudioSession()
+        if queue.isEmpty { phase = .listening }
+        await resumeListeningIfNeeded()
+    }
+}
+
+/// AVAudioPlayer 播完 / 解码失败 → 唤醒等在 wait() 上的那个 continuation（只唤一次）。
+private final class PlaybackWaiter: NSObject, AVAudioPlayerDelegate {
+    private var continuation: CheckedContinuation<Void, Never>? = nil
+    private var finished = false
+    private var timeoutTask: Task<Void, Never>? = nil
+
+    func wait(timeout: TimeInterval) async {
+        if finished { return }
+        await withCheckedContinuation { (cont: CheckedContinuation<Void, Never>) in
+            self.continuation = cont
+            self.timeoutTask = Task { [weak self] in
+                try? await Task.sleep(nanoseconds: UInt64(timeout * 1_000_000_000))
+                self?.finish()
+            }
+        }
+    }
+
+    func cancel() { finish() }
+
+    private func finish() {
+        guard !finished else { return }
+        finished = true
+        timeoutTask?.cancel()
+        timeoutTask = nil
+        continuation?.resume()
+        continuation = nil
+    }
+
+    nonisolated func audioPlayerDidFinishPlaying(_ player: AVAudioPlayer, successfully flag: Bool) {
+        Task { @MainActor in self.finish() }
+    }
+
+    nonisolated func audioPlayerDecodeErrorDidOccur(_ player: AVAudioPlayer, error: Error?) {
+        Task { @MainActor in self.finish() }
     }
 }
 
