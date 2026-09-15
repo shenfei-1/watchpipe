@@ -32,6 +32,7 @@
    xtool install /mnt/c/Users/<你的用户名>/Desktop/WatchPipe.ipa   # 问是否吊销旧证书 → yes
    ```
    （`export` 只对当前窗口有效，`xtool install` 要在同一个窗口里跑。）
+   一劳永逸：把那句 `export USBMUXD_SOCKET_ADDRESS=...` 追加到 `~/.bashrc` 末尾（`echo 'export USBMUXD_SOCKET_ADDRESS=$(ip route show default | awk '"'"'{print $3}'"'"'):27016' >> ~/.bashrc`），以后新开窗口自动带上；9/15 她重启电脑后新窗口丢了这句，xtool 一直 Waiting for device，绕了十八分钟。
 4. **手机上**：设置 → 通用 → VPN与设备管理 → 信任；iOS 16+ 还要 设置 → 隐私与安全性 → 开发者模式（开完重启）。
 5. **打开 WatchPipe**：填接口地址（默认已填）和令牌（在 VPS 的 `/root/health/secret.txt`，或问珩），保存 → 点「授权读取健康数据」全部允许 → 看日志。
    看到一排 **「后台投递已开」** 就成了；看到「后台投递未开 Missing … entitlement」就是装的不是补丁版 xtool 签的包。
