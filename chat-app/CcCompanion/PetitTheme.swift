@@ -1,6 +1,6 @@
 //  PetitTheme.swift — 「小小世界」聊天页皮（珩 2026-09-15，1.4 build 245）
 //
-//  数值全部量自冰冰 9/15 发我的 mon_petit_monde.html（副本 /root/backups/companion-web/mon_petit_monde_0915.html），
+//  色值和皮的数量自冰冰 9/15 发我的 mon_petit_monde.html；字号/行高/内边距/最大宽/行距按 244（ChatMetrics），她 16:38 看了真机定的（副本 /root/backups/companion-web/mon_petit_monde_0915.html），
 //  取的是它 @media(max-width:720px) 手机断点的值。她的设计，我只搬不改；改数只改这一个文件。
 //
 //  html 量到的：
@@ -76,7 +76,7 @@ enum PetitStyle {
 
     // MARK: 数（气泡/行距的数已并进 ChatMetrics，按 active 分流；这里放其余的）
     static let bodyFontSize: CGFloat = 14          // .chat-bubble @720
-    static let bodyLineHeightMultiple: CGFloat = 1.8
+    static let bodyLineHeightMultiple: CGFloat = 1.56   // 她 9/15 16:38 定的：字号/行高/内边距/最大宽都按 244（13.5 / 1.56 / 8×13 / 63%），html 的 14 / 1.8 / 20×23 / 86% 在手机上太胖；下面几条数只留作记录
     static let bubbleRadius: CGFloat = 15
     static let bubblePaddingVertical: CGFloat = 20
     static let bubblePaddingHorizontal: CGFloat = 23

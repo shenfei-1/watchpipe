@@ -690,6 +690,8 @@ final class ChatViewModel: ObservableObject {
     // Phase 3 (build 223): silent push 带 turn_id 到达 → 直接拉 thinking, 不等下一次 chat poll.
     private var thinkingPushObserver: NSObjectProtocol?
 
+    static let shared = ChatViewModel()   // 珩 2026-09-15 build 246：跨标签保活
+
     init() {
         thinkingPushObserver = NotificationCenter.default.addObserver(
             forName: .ccThinkingPending, object: nil, queue: .main
@@ -1027,7 +1029,9 @@ final class ChatViewModel: ObservableObject {
         pollingTask?.cancel()
         pollingTask = Task { [weak self] in
             // 2026-05-07 hotfix removed: enforceCacheCap 是 SwiftData 卡 search 时代的兜底 GRDB+FTS5 全量搜不需要 cap
-            await self?.loadCachedHistory()
+            if self?.messages.isEmpty ?? true {   // 珩 2026-09-15 build 246：切标签回来内存里已有消息就不重载缓存
+                await self?.loadCachedHistory()
+            }
             await self?.bootstrapHistory()
             await self?.pollOnce()
             // Phase 设置大砍 (item B) — populate favorite cache so bookmark icons render correctly
@@ -2740,12 +2744,17 @@ final class ChatViewModel: ObservableObject {
               let list = try? JSONDecoder().decode([ChatMessage].self, from: data),
               !list.isEmpty else { return }
         self.pendingFailedMessages = list
+        var appended = false
         for m in list {
             if !messages.contains(where: { $0.id == m.id }) {
                 messages.append(m)
+                appended = true
             }
             failedIds.insert(m.id)
         }
+        // 珩 2026-09-15 build 246：之前只 append 不排序，失败的旧消息会先蹲在列表最底下，
+        // 等服务器历史回来重排才跳回原位——她切回聊天页看到的"先闪几条发送失败的"就是这个。
+        if appended { _sortMessages() }
     }
 
     private func appendToPendingFailed(_ msg: ChatMessage) {
@@ -2798,7 +2807,8 @@ final class ChatViewModel: ObservableObject {
 
 struct ChatView: View {
     @Environment(\.scenePhase) private var scenePhase
-    @StateObject private var vm = ChatViewModel()
+    // 珩 2026-09-15 build 246：vm 改成全局一份，切标签回来消息还在内存里，不再从缓存重载一遍再闪
+    @ObservedObject private var vm = ChatViewModel.shared
     @StateObject private var speech = SpeechRecognizer()
     @FocusState private var inputFocused: Bool
     @AppStorage("ai_avatar_emoji") private var aiAvatarEmoji: String = "🦀"

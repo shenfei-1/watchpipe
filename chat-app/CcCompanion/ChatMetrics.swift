@@ -18,7 +18,7 @@ import UIKit
 enum ChatMetrics {
     // MARK: 正文
     /// PWA 手机断点 .bubble font-size: 13.5px。设置里的 小/中/大 在此基础上 ∓1.5。
-    static var bodyFontSize: CGFloat { PetitStyle.active ? PetitStyle.bodyFontSize : 13.5 }   // 小小世界：14（珩 2026-09-15）
+    static let bodyFontSize: CGFloat = 13.5   // 小小世界皮也用这个数（她 9/15 16:38 定的：字号/间距按 244）
     static let bodyFontStep: CGFloat = 1.5
     /// PWA line-height 1.56 → 行高 ≈ 21pt；SwiftUI 用 lineSpacing 补差值。
     static let bodyLineHeightMultiple: CGFloat = 1.56
@@ -33,21 +33,21 @@ enum ChatMetrics {
 
     /// 行距补差：目标行高（字号 × 1.56）减去系统字体自身行高，不足 0 归 0。
     static func bodyLineSpacing(fontSize: CGFloat) -> CGFloat {
-        if PetitStyle.active { return PetitStyle.bodyLineSpacing(fontSize: fontSize) }   // 小小世界：宋体 × 1.8
+        if PetitStyle.active { return PetitStyle.bodyLineSpacing(fontSize: fontSize) }   // 小小世界：宋体，倍数同 1.56
         let natural = UIFont.systemFont(ofSize: fontSize).lineHeight
         return max(0, (fontSize * bodyLineHeightMultiple).rounded() - natural)
     }
 
     // MARK: 气泡
     /// PWA padding: 8px 13px
-    static var bubblePaddingVertical: CGFloat { PetitStyle.active ? PetitStyle.bubblePaddingVertical : 8 }
-    static var bubblePaddingHorizontal: CGFloat { PetitStyle.active ? PetitStyle.bubblePaddingHorizontal : 13 }
+    static let bubblePaddingVertical: CGFloat = 8
+    static let bubblePaddingHorizontal: CGFloat = 13
     /// PWA --bubble-radius: clamp(14px, 2vw, 20px) → 手机 14
     static var bubbleCornerRadius: CGFloat { PetitStyle.active ? PetitStyle.bubbleRadius : 14 }
     /// PWA .row.tail：段尾外下角收成 2px 小尖
     static let bubbleTailCornerRadius: CGFloat = 2
     /// PWA max-width: min(63vw, 520px)
-    static var bubbleMaxWidthFraction: CGFloat { PetitStyle.active ? PetitStyle.bubbleMaxWidthFraction : 0.63 }
+    static let bubbleMaxWidthFraction: CGFloat = 0.63
     static let bubbleMaxWidthCap: CGFloat = 520
 
     static func bubbleMaxWidth(containerWidth: CGFloat) -> CGFloat {
@@ -57,11 +57,11 @@ enum ChatMetrics {
 
     // MARK: 行
     /// PWA --side-pad: 16px（气泡离屏幕两侧）
-    static var sideInset: CGFloat { PetitStyle.active ? PetitStyle.sideInset : 16 }
+    static let sideInset: CGFloat = 16
     /// PWA .row margin-top: 18px（不同段之间）
-    static var rowGap: CGFloat { PetitStyle.active ? PetitStyle.rowGap : 18 }
+    static let rowGap: CGFloat = 18
     /// PWA .row.grouped margin-top: 8px（同方 5 分钟内连发）
-    static var rowGapGrouped: CGFloat { PetitStyle.active ? PetitStyle.rowGapGrouped : 8 }
+    static let rowGapGrouped: CGFloat = 8
     /// PWA GROUP_GAP = 5 分钟：同一方两条消息间隔 ≤ 这个数就成组（时间戳只在段尾显示、圆角只在段尾收尖）
     static let groupGapSeconds: TimeInterval = 5 * 60
     /// 列表最底下留的一点空（原 safeAreaInset 8）
@@ -73,7 +73,7 @@ enum ChatMetrics {
     /// PWA .meta font-size: 11px
     static var timeFontSize: CGFloat { PetitStyle.active ? PetitStyle.timeFontSize : 11 }
     /// 时间行与气泡的距离
-    static var timeTopGap: CGFloat { PetitStyle.active ? PetitStyle.timeTopGap : 2 }
+    static let timeTopGap: CGFloat = 2
 
     // MARK: 判定
     /// 两条消息是否"同一段"：同一方、都不是 task、间隔 ≤ groupGapSeconds。
