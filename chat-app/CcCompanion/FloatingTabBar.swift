@@ -44,17 +44,21 @@ struct FloatingTabBar: View {
                 }
                 .padding(.horizontal, 6)
                 .padding(.vertical, 6)
+                .frame(height: PetitStyle.active ? PetitStyle.navHeight : nil)
+                // 小小世界：圆角 25、纸白 .94、边 #e4d8df、阴影 0 10 35、离底 18、宽 96%（珩 2026-09-15，量自 html nav）
                 .background(
-                    RoundedRectangle(cornerRadius: 24, style: .continuous)
-                        .fill(Color.ccFloatingBarBg)
+                    RoundedRectangle(cornerRadius: PetitStyle.active ? PetitStyle.navRadius : 24, style: .continuous)
+                        .fill(PetitStyle.active ? PetitStyle.navBg : Color.ccFloatingBarBg)
                         .overlay(
-                            RoundedRectangle(cornerRadius: 24, style: .continuous)
-                                .strokeBorder(Color.ccAssistant.opacity(0.08), lineWidth: 0.5)
+                            RoundedRectangle(cornerRadius: PetitStyle.active ? PetitStyle.navRadius : 24, style: .continuous)
+                                .strokeBorder(PetitStyle.active ? PetitStyle.navBorder : Color.ccAssistant.opacity(0.08),
+                                              lineWidth: PetitStyle.active ? 1 : 0.5)
                         )
-                        .shadow(color: .black.opacity(0.18), radius: 12, x: 0, y: 4)
+                        .shadow(color: PetitStyle.active ? PetitStyle.navShadow : .black.opacity(0.18),
+                                radius: PetitStyle.active ? 17 : 12, x: 0, y: PetitStyle.active ? 10 : 4)
                 )
-                .padding(.horizontal, 12)
-                .padding(.bottom, 8)
+                .padding(.horizontal, PetitStyle.active ? 8 : 12)
+                .padding(.bottom, PetitStyle.active ? PetitStyle.navBottom : 8)
             } else {
                 ScrollViewReader { proxy in
                     ScrollView(.horizontal, showsIndicators: false) {
@@ -103,10 +107,10 @@ struct FloatingTabBar: View {
         let inactiveFg: Color = Color.ccText
         let titleDesign: Font.Design = .monospaced
         #else
-        let iconSize: CGFloat = 20  // Phase D bumped 18 → 20 (用户 push tab bar 太窄)
+        let iconSize: CGFloat = PetitStyle.active ? PetitStyle.navIconSize : 20  // Phase D bumped 18 → 20 (用户 push tab bar 太窄)；小小世界 23
         let titleSize: CGFloat = 11  // 10 → 11
-        let activeBg: Color = Color.ccAccent.opacity(0.18)
-        let activeFg: Color = Color.ccAccent
+        let activeBg: Color = PetitStyle.active ? Color.clear : Color.ccAccent.opacity(0.18)   // 小小世界：选中只换色不画圆
+        let activeFg: Color = PetitStyle.active ? PetitStyle.navActive : Color.ccAccent
         let inactiveFg: Color = Color.ccFloatingBarText  // T1 fix: warm 主题下系统 dark 不再压成黑色 → 文字也跟着 fixed
         let titleDesign: Font.Design = .default
         #endif

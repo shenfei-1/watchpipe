@@ -2930,8 +2930,8 @@ struct ChatView: View {
     @ViewBuilder
     private func chatRowView(_ row: ChatRowItem) -> some View {
         switch row {
-        case .separator(let label, _):
-            ChatSeparatorRow(label: label)
+        case .separator(let label, let sepId):
+            ChatSeparatorRow(label: label, id: sepId)
         case .toolStack(let stack):
             ToolActivityStackView(stack: stack)
                 .id("stack_\(stack.id)")
@@ -3014,7 +3014,7 @@ struct ChatView: View {
             }
             .padding(.horizontal, 16)
             .padding(.vertical, 8)
-            .background(Color.ccBg)
+            .background(PetitStyle.active ? AnyView(PetitHeaderBackground()) : AnyView(Color.ccBg))   // 小小世界：半透明纸 + 底边线
 
             // 搜索 search bar + filter tab — 仅 search 模式可见 自定义实现 (replace .searchable iOS 17+ bug)
             if showSearch {
@@ -3112,6 +3112,9 @@ struct ChatView: View {
                 if vm.isCcTyping {
                     TypingStatusBar()
                 }
+                if PetitStyle.active {
+                    PetitSealRow()   // 小小世界："sealed with a little love ♡"
+                }
                 ChatInputBar(
                     vm: vm,
                     speech: speech,
@@ -3130,6 +3133,9 @@ struct ChatView: View {
         .background(
             ZStack {
                 Color.ccBg
+                if PetitStyle.active, chatBackgroundPath.isEmpty {
+                    PetitBackground()   // 小小世界：135° 渐变 + 白点（珩 2026-09-15）
+                }
                 #if canImport(UIKit)
                 if !chatBackgroundPath.isEmpty,
                    let img = AvatarDiskStore.load(storedValue: chatBackgroundPath) {
@@ -3580,12 +3586,15 @@ private struct ChatInputBar: View {
             // build 93: 麦克风搬进 TextField 内右侧 inset 跟微信一致
             ZStack(alignment: .trailing) {
                 // Phase 设置大砍 (item D) — 输入框单行起 自动扩高到 5 行 微信式 + Enter commit
-                TextField(storedPlaceholder, text: $draftLocal, axis: .vertical)
+                // 小小世界：占位 "记录此刻的想法..."、宋体 15、圆胶囊（PetitInputField）；关着时原样（珩 2026-09-15）
+                TextField("", text: $draftLocal,
+                          prompt: Text(PetitStyle.active ? "记录此刻的想法..." : storedPlaceholder)
+                              .foregroundStyle(PetitStyle.active ? PetitStyle.placeholder : Color(uiColor: .placeholderText)),
+                          axis: .vertical)
                     .lineLimit(1...5)
-                    .font(.system(size: 17))
+                    .font(PetitStyle.active ? PetitStyle.body(15) : .system(size: 17))
                     .tint(Color.ccAccent)
-                    .padding(.leading, 6)
-                    .textFieldStyle(.roundedBorder)
+                    .modifier(PetitInputField())
                     .focused(inputFocused)
                     .submitLabel(.send)
                     .onSubmit {
@@ -3663,12 +3672,13 @@ private struct ChatInputBar: View {
                     .font(.ccSerifAdaptive(size: 20, weight: .semibold))
                     .scaleEffect(x: (vm.sending || commitPending) ? 1 : -1, y: 1)
                     .rotationEffect(.degrees((vm.sending || commitPending) ? 0 : -15))
-                    .foregroundStyle(Color.ccAccent.opacity(hasContent ? 1.0 : 0.35))
+                    .foregroundStyle((PetitStyle.active ? PetitStyle.sendFg : Color.ccAccent).opacity(hasContent ? 1.0 : 0.35))
+                    .modifier(PetitSendButton())   // 小小世界：47 的圆
             }
             .disabled(vm.sending || commitPending)
         }
         .padding(10)
-        .background(Color.ccBg)
+        .background(PetitStyle.active ? Color.clear : Color.ccBg)
         .onAppear {
             // 2026-05-10 用户 push 切 tab 不丢草稿 view 重建 onAppear 从 vm.draft init draftLocal
             if draftLocal.isEmpty && !vm.draft.isEmpty { draftLocal = vm.draft }
@@ -4316,8 +4326,8 @@ private struct ChatRowHost: View {
 
     var body: some View {
         switch row {
-        case .separator(let label, _):
-            ChatSeparatorRow(label: label)
+        case .separator(let label, let sepId):
+            ChatSeparatorRow(label: label, id: sepId)
                 .frame(maxWidth: .infinity, alignment: .leading)
         case .toolStack(let stack):
             ToolActivityStackView(stack: stack)
@@ -4530,8 +4540,18 @@ private func timelineKind(for msg: ChatMessage) -> TimelineNodeKind {
 
 private struct ChatSeparatorRow: View {
     let label: String
+    var id: String = ""
 
     var body: some View {
+        // 小小世界：分隔行换成眉题 "SEPTEMBER 15 · OUR CONVERSATION"（珩 2026-09-15）
+        if PetitStyle.active, let eyebrow = PetitStyle.eyebrowText(fromSeparatorId: id) {
+            PetitEyebrowRow(text: eyebrow)
+        } else {
+            legacyBody
+        }
+    }
+
+    private var legacyBody: some View {
         HStack {
             Spacer()
             Text(label)
@@ -5595,7 +5615,7 @@ struct ChatBubble: View {
     /// 段尾（showTime 为真 = 这一方这一段的最后一条）外下角收成小尖，其余三角 14
     private var bubbleShape: UnevenRoundedRectangle {
         let r = ChatMetrics.bubbleCornerRadius
-        let t = ChatMetrics.bubbleTailCornerRadius
+        let t = PetitStyle.active ? r : ChatMetrics.bubbleTailCornerRadius   // 小小世界：四角都圆，不收尖（珩 2026-09-15）
         return UnevenRoundedRectangle(
             topLeadingRadius: r,
             bottomLeadingRadius: (showTime && !message.isUser) ? t : r,
@@ -5642,8 +5662,12 @@ struct ChatBubble: View {
 
     private var chatRow: some View {
         // Phase G2 2026-05-11 用户 push — bubble 靠 row 自己那侧 (AI 左 / USER 右), timestamp 在 bubble 下方同侧 (caption 风格).
-        HStack(alignment: .bottom, spacing: 0) {
+        HStack(alignment: PetitStyle.active ? .top : .bottom, spacing: 0) {
             if message.isUser { Spacer(minLength: 40) }
+            if PetitStyle.active, !message.isUser {
+                // 小小世界：AI 气泡左边那枚 ✧ 圆（珩 2026-09-15）
+                PetitStar().padding(.trailing, PetitStyle.starGap)
+            }
             VStack(alignment: message.isUser ? .trailing : .leading, spacing: 2) {
                 if let q = message.quotedText, !q.isEmpty {
                     HStack(spacing: 6) {
@@ -5734,7 +5758,7 @@ struct ChatBubble: View {
                                 // magic 所以 inner 选词菜单覆盖了外层. 这次以外层菜单为准, 失去单词级选择能力,
                                 // 通过外层"复制本条"补全复制路径, 翻译走外层 (下面 row contextMenu 增加).
                                 Text(s)
-                                    .font(.system(size: bodySize))   // 珩 2026-09-06：正文换苹方（她选的）；字号见 ChatMetrics
+                                    .font(PetitStyle.active ? PetitStyle.body(bodySize) : .system(size: bodySize))   // 珩 2026-09-06：正文换苹方（她选的）；字号见 ChatMetrics。09-15 小小世界：宋体
                                     .lineSpacing(ChatMetrics.bodyLineSpacing(fontSize: bodySize))   // PWA line-height 1.56
                                     .foregroundStyle(message.isUser ? Color.ccUserText : Color.ccAssistantText)
                                     .lineLimit(nil)
@@ -5765,9 +5789,10 @@ struct ChatBubble: View {
                     .frame(maxWidth: max(80, bubbleMaxWidth - ChatMetrics.bubblePaddingHorizontal * 2), alignment: .leading)
                     .padding(.horizontal, ChatMetrics.bubblePaddingHorizontal)
                     .padding(.vertical, ChatMetrics.bubblePaddingVertical)
-                    .background(message.isUser ? Color.ccUser : Color.ccAssistant)
+                    .background(PetitStyle.active ? Color.clear : (message.isUser ? Color.ccUser : Color.ccAssistant))
                     .foregroundStyle(message.isUser ? Color.ccUserText : Color.ccAssistantText)
                     .clipShape(bubbleShape)
+                    .modifier(PetitBubbleChromeIfActive(isUser: message.isUser))   // 小小世界：纸色/粉色 + 细边 + 软阴影（珩 2026-09-15）
                 }
                 if let loc = message.location {
                     Button {
@@ -5872,8 +5897,11 @@ struct ChatBubble: View {
                             .simultaneousGesture(TapGesture().onEnded { retry() })
                         }
                         if showTime {
-                            Text(displayTime(message.ts))
-                                .font(.system(size: ChatMetrics.timeFontSize, design: .monospaced))
+                            // 小小世界：AI 侧 "10:00 · 珩"，字不用等宽（珩 2026-09-15）
+                            Text(PetitStyle.active && !message.isUser
+                                 ? "\(displayTime(message.ts)) · \(CcNameResolver.name(for: .ai))"
+                                 : displayTime(message.ts))
+                                .font(PetitStyle.active ? .system(size: ChatMetrics.timeFontSize) : .system(size: ChatMetrics.timeFontSize, design: .monospaced))
                                 .foregroundStyle(message.isUser && sendStatus == .failed
                                                  ? Color(red: 0.866, green: 0.314, blue: 0.314).opacity(0.7)
                                                  : Color.ccTextDim)

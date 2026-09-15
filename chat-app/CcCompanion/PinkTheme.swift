@@ -29,7 +29,16 @@ enum PinkPalette {
     ]
     private static var cache: [String: String] = (UserDefaults.standard.dictionary(forKey: storeKey) as? [String: String]) ?? [:]
 
-    private static func hex(_ k: String) -> String { cache[k] ?? defaults[k] ?? "#FFE4F3" }
+    /// 「小小世界」皮开着时的浅色值（量自 mon_petit_monde.html，见 PetitTheme.swift）；深色键不在这里，沿用冰粉的深色
+    private static let petitLight: [String: String] = [
+        "bg": "#EEE4EB", "card": "#FFFDFB", "assistant": "#FFFDFB", "user": "#E8C5D7",
+        "text": "#866B7D", "textDim": "#9C8794", "accent": "#B77F99", "userText": "#866B7D", "assistantText": "#866B7D",
+        "tabBar": "#9A8290",
+    ]
+    private static func hex(_ k: String) -> String {
+        if PetitStore.shared.enabled, let p = petitLight[k] { return p }
+        return cache[k] ?? defaults[k] ?? "#FFE4F3"
+    }
     private static func dyn(_ light: String, _ dark: String) -> Color {
         Color(light: Color(hex: hex(light)), dark: Color(hex: hex(dark)))
     }

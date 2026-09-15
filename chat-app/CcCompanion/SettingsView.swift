@@ -570,6 +570,7 @@ struct CcSettingsView: View {
     @AppStorage("debug_unlocked") private var debugUnlocked: Bool = false
 
     @ObservedObject private var themeStore = ThemeStore.shared  // Phase E — 主题 picker
+    @ObservedObject private var petitStore = PetitStore.shared  // 珩 2026-09-15 小小世界皮开关
 
     // Phase E (item 7) — 聊天背景 disk path. 空字符串 = 走主题 bg color.
     @AppStorage("chat_background_path") private var chatBackgroundPath: String = ""
@@ -703,6 +704,9 @@ struct CcSettingsView: View {
                     .pickerStyle(.segmented)
                     .padding(.vertical, 4)
 
+                    if themeStore.theme == .pink {
+                        toggleRow("小小世界（纸气泡皮）", binding: $petitStore.enabled)
+                    }
                     toggleRow("跟随系统切换浅色/深色", binding: $themeStore.followSystemColorScheme)
 
                     if !themeStore.followSystemColorScheme && (themeStore.theme == .warm || themeStore.theme == .pink) {
