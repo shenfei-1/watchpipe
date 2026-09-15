@@ -121,8 +121,14 @@ struct FloatingTabBar: View {
         } label: {
             // 珩 2026-09-06（1.2.1）：照她发的样子——细线图标坐在一枚圆里，选中时圆变粉；字在圆下面
             VStack(spacing: PetitStyle.active ? 2 : 4) {
-                Image(systemName: item.systemImage)
-                    .font(.system(size: iconSize, weight: .regular))
+                Group {
+                    if PetitStyle.active, let glyph = PetitStyle.tabGlyph(for: item.id) {
+                        Text(glyph).font(.system(size: iconSize + 2))   // 小小世界：html nav 的字符图标（她 9/15 16:56 定的）
+                    } else {
+                        Image(systemName: item.systemImage)
+                            .font(.system(size: iconSize, weight: .regular))
+                    }
+                }
                     .frame(width: PetitStyle.active ? PetitStyle.navIconFrame : 44, height: PetitStyle.active ? PetitStyle.navIconFrame : 44)   // 小小世界：一半高度版（她 9/15 16:40 定的）
                     .background(Circle().fill(isActive ? activeBg : Color.clear))
                     .overlay(alignment: .topTrailing) {

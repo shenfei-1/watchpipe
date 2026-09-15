@@ -107,6 +107,18 @@ enum PetitStyle {
     static let navTitleSize: CGFloat = 12
     static let headerHeight: CGFloat = 72
 
+    /// 底栏图标换成 html nav 里的字符（她 9/15 16:56 定的）：⌂ Home、✧ Memory、♡ Chat、▦ Features、⚙ Settings
+    static func tabGlyph(for id: Int) -> String? {
+        switch id {
+        case 0: return "♡"   // Chat
+        case 1: return "⌂"   // Home
+        case 4: return "✧"   // Album（html 里的 Memory）
+        case 2: return "⚙"   // Settings
+        case 3: return "▦"   // 工作群（html 里的 Features）
+        default: return nil
+        }
+    }
+
     // MARK: 字体（html：Georgia 斜体 / "Noto Serif SC"→iOS 用内置 Songti SC，和 CcFont 里 ccSerif 一路）
     static func body(_ size: CGFloat) -> Font { .custom("STSongti-SC-Regular", size: size) }
     static func italic(_ size: CGFloat) -> Font { .custom("CormorantGaramond-500Italic", size: size) }
