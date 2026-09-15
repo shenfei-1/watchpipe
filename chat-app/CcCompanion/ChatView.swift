@@ -5674,10 +5674,7 @@ struct ChatBubble: View {
         // Phase G2 2026-05-11 用户 push — bubble 靠 row 自己那侧 (AI 左 / USER 右), timestamp 在 bubble 下方同侧 (caption 风格).
         HStack(alignment: PetitStyle.active ? .top : .bottom, spacing: 0) {
             if message.isUser { Spacer(minLength: 40) }
-            if PetitStyle.active, !message.isUser {
-                // 小小世界：AI 气泡左边那枚 ✧ 圆（珩 2026-09-15）
-                PetitStar().padding(.trailing, PetitStyle.starGap)
-            }
+            // 小小世界：AI 气泡左边那枚 ✧ 圆——她 9/15 17:17 看了真机说没有更好看，拿掉了（PetitStar 留着没用）
             VStack(alignment: message.isUser ? .trailing : .leading, spacing: 2) {
                 if let q = message.quotedText, !q.isEmpty {
                     HStack(spacing: 6) {
