@@ -43,7 +43,7 @@ struct FloatingTabBar: View {
                     }
                 }
                 .padding(.horizontal, 6)
-                .padding(.vertical, 6)
+                .padding(.vertical, PetitStyle.active ? 2 : 6)
                 .frame(height: PetitStyle.active ? PetitStyle.navHeight : nil)
                 // 小小世界：圆角 25、纸白 .94、边 #e4d8df、阴影 0 10 35、离底 18、宽 96%（珩 2026-09-15，量自 html nav）
                 .background(
@@ -120,20 +120,20 @@ struct FloatingTabBar: View {
             }
         } label: {
             // 珩 2026-09-06（1.2.1）：照她发的样子——细线图标坐在一枚圆里，选中时圆变粉；字在圆下面
-            VStack(spacing: 4) {
+            VStack(spacing: PetitStyle.active ? 2 : 4) {
                 Image(systemName: item.systemImage)
                     .font(.system(size: iconSize, weight: .regular))
-                    .frame(width: 44, height: 44)
+                    .frame(width: PetitStyle.active ? PetitStyle.navIconFrame : 44, height: PetitStyle.active ? PetitStyle.navIconFrame : 44)   // 小小世界：一半高度版（她 9/15 16:40 定的）
                     .background(Circle().fill(isActive ? activeBg : Color.clear))
                     .overlay(alignment: .topTrailing) {
                         badgeView(for: item.badge)
                             .offset(x: -4, y: 4)
                     }
                 Text(item.title)
-                    .font(.custom("CormorantGaramond-Light", size: titleSize + 5))   // 珩 2026-09-06 衬线英文；09-11 build 242 改细（她 9/6 定的）
+                    .font(.custom("CormorantGaramond-Light", size: PetitStyle.active ? PetitStyle.navTitleFontSize : titleSize + 5))   // 珩 2026-09-06 衬线英文；09-11 build 242 改细（她 9/6 定的）
             }
             .foregroundStyle(isActive ? activeFg : inactiveFg)
-            .padding(.vertical, 4)
+            .padding(.vertical, PetitStyle.active ? 0 : 4)
             .padding(.horizontal, 10)
             .id(item.id)
         }

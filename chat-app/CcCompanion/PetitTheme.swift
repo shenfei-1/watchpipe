@@ -92,16 +92,18 @@ enum PetitStyle {
     static let eyebrowTracking: CGFloat = 11 * 0.26
     static let eyebrowBottom: CGFloat = 24
     static let sealFontSize: CGFloat = 14
-    static let inputHeight: CGFloat = 70
+    static let inputHeight: CGFloat = 36           // html 70；她 9/15 16:40 说底下太高，要一半
     static let inputRadius: CGFloat = 27
-    static let inputLeading: CGFloat = 24
+    static let inputLeading: CGFloat = 16          // html 24，随高度一起收
     static let inputTrailing: CGFloat = 13
-    static let sendSize: CGFloat = 47
-    static let sendIconSize: CGFloat = 21
-    static let navHeight: CGFloat = 74
+    static let sendSize: CGFloat = 34              // html 47，一半高度版
+    static let sendIconSize: CGFloat = 17
+    static let navHeight: CGFloat = 48             // html 74，一半高度版
     static let navRadius: CGFloat = 25
-    static let navBottom: CGFloat = 18
-    static let navIconSize: CGFloat = 23
+    static let navBottom: CGFloat = 8              // html 18，一半高度版
+    static let navIconSize: CGFloat = 19           // html 23，一半高度版
+    static let navIconFrame: CGFloat = 26          // 图标外框（原 44）
+    static let navTitleFontSize: CGFloat = 13      // 底栏英文（原 Cormorant 16）
     static let navTitleSize: CGFloat = 12
     static let headerHeight: CGFloat = 72
 
@@ -205,10 +207,10 @@ struct PetitEyebrowRow: View {
 struct PetitSealRow: View {
     var body: some View {
         Text("sealed with a little love ♡")
-            .font(PetitStyle.italic(PetitStyle.sealFontSize + 2))
+            .font(PetitStyle.italic(PetitStyle.sealFontSize))
             .foregroundStyle(PetitStyle.seal)
             .frame(maxWidth: .infinity)
-            .padding(.vertical, 6)
+            .padding(.top, 2)
     }
 }
 
@@ -248,7 +250,7 @@ struct PetitInputField: ViewModifier {
             content
                 .textFieldStyle(.plain)
                 .padding(.leading, PetitStyle.inputLeading)
-                .padding(.vertical, 12)
+                .padding(.vertical, 6)
                 .frame(minHeight: PetitStyle.inputHeight)
                 .background(
                     RoundedRectangle(cornerRadius: PetitStyle.inputRadius, style: .continuous)
